@@ -1,0 +1,1252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SENSIBLE BEACH VOLLEY — USA vs SWEDEN</title>
+<style>
+  html,body{margin:0;padding:0;background:#10102a;overflow:hidden;height:100%;}
+  #game{position:fixed;inset:0;}
+  canvas{image-rendering:pixelated;}
+  #hud{
+    position:fixed;top:8px;left:50%;transform:translateX(-50%);
+    font-family:'Courier New',monospace;font-weight:bold;
+    color:#fff;text-shadow:2px 2px 0 #000;
+    font-size:22px;letter-spacing:2px;z-index:10;user-select:none;
+    background:rgba(0,0,30,.55);padding:4px 14px;border:2px solid #fff;
+    text-align:center;
+  }
+  #hud .usa{color:#ff5a5a}
+  #hud .swe{color:#ffe14d}
+  #touches{font-size:14px;letter-spacing:4px;margin-top:2px;color:#9fdcff;min-height:16px;}
+  #banner{
+    position:fixed;top:42%;left:50%;transform:translate(-50%,-50%);
+    font-family:'Courier New',monospace;font-weight:bold;text-align:center;
+    color:#ffe14d;text-shadow:3px 3px 0 #000;font-size:34px;letter-spacing:3px;
+    z-index:11;user-select:none;white-space:pre-line;
+  }
+  #help{
+    position:fixed;bottom:8px;left:50%;transform:translateX(-50%);
+    font-family:'Courier New',monospace;color:#cfe8ff;text-shadow:1px 1px 0 #000;
+    font-size:13px;letter-spacing:1px;z-index:10;user-select:none;text-align:center;
+    background:rgba(0,0,30,.45);padding:3px 10px;
+  }
+  #toast{
+    position:fixed;top:60px;left:50%;transform:translateX(-50%);
+    font-family:'Courier New',monospace;font-weight:bold;color:#7bff6e;
+    text-shadow:2px 2px 0 #000;font-size:14px;letter-spacing:1px;z-index:12;
+    background:rgba(0,0,30,.7);padding:4px 12px;border:1px solid #7bff6e;
+    display:none;user-select:none;text-align:center;
+  }
+  #padcfg{
+    position:fixed;inset:0;z-index:20;display:none;
+    background:rgba(5,5,25,.88);
+    font-family:'Courier New',monospace;font-weight:bold;color:#fff;
+    text-shadow:2px 2px 0 #000;letter-spacing:2px;text-align:center;
+    user-select:none;
+  }
+  #padcfg .inner{
+    position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+    border:3px solid #ffe14d;padding:26px 34px;background:rgba(0,0,40,.8);
+    min-width:320px;
+  }
+  #padcfg h2{color:#ffe14d;font-size:24px;margin:0 0 16px 0;}
+  #padcfg .row{font-size:15px;margin:8px 0;color:#cfe8ff;}
+  #padcfg .hl{color:#7bff6e;}
+  #padcfg .hint{font-size:12px;color:#9fdcff;margin-top:16px;}
+  #servebox{
+    position:fixed;top:70px;right:14px;z-index:10;display:none;
+    font-family:'Courier New',monospace;font-weight:bold;color:#fff;
+    text-shadow:2px 2px 0 #000;text-align:center;user-select:none;
+    background:rgba(0,0,30,.72);border:2px solid #ffe14d;padding:6px 10px;
+  }
+  #servebox canvas{image-rendering:pixelated;width:72px;height:72px;display:block;margin:0 auto;}
+  #servebox .stime{font-size:26px;color:#ffe14d;letter-spacing:2px;line-height:1;}
+  #servebox .slabel{font-size:10px;color:#9fdcff;letter-spacing:1px;margin-top:2px;}
+  #servebox .sbarwrap{width:72px;height:6px;background:#222;border:1px solid #fff;margin:4px auto 0;}
+  #servebox .sbar{height:100%;background:#7bff6e;width:100%;}
+</style>
+</head>
+<body>
+<div id="game"></div>
+<div id="hud"><div id="score"><span class="usa">USA 0</span> — <span class="swe">0 SWE</span></div><div id="touches"></div></div>
+<div id="banner">SENSIBLE BEACH VOLLEY
+USA vs SWEDEN
+PRESS SPACE TO SERVE</div>
+<div id="help">MOVE: ARROWS/WASD · <b>Z</b>: BUMP/DIVE · <b>X</b>: SET · <b>C</b>: ATTACK · SPACE: AUTO/SERVE · <b>1/2/3</b>: MAIN / SIDE L / SIDE R COURT · P/OPTIONS: PAD CONFIG</div>
+<div id="toast"></div>
+<div id="servebox">
+  <canvas id="refIcon" width="24" height="24"></canvas>
+  <div class="stime" id="serveTime">8</div>
+  <div class="sbarwrap"><div class="sbar" id="serveBar"></div></div>
+  <div class="slabel">SERVICE · 8 SEC</div>
+</div>
+<div id="padcfg"><div class="inner" id="padcfgInner"></div></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script type="module">
+import {
+  createCourtController,
+  inCourt, clampPlayerOnCourt, isOnCourtSide, courtSideAtZ,
+  netCrossEvent, pickTargetLocal, targetToWorld,
+} from './js/court/index.js';
+import { makeTex, flatPlane, getShadowTex } from './js/render/textures.js';
+import { SIDE_USA, SIDE_SWE, createPlayers, syncPlayerSprite } from './js/players/players.js';
+import { REF_AUTH_TIME } from './js/npc/npc.js';
+
+// ============================================================
+// SENSIBLE BEACH VOLLEY — retro top-down 2v2 arcade volleyball
+// Fundamentals update: pose sprites (ready/bump/dig/set), body
+// orientation toward the ball, cushioned reception, high defensive
+// dig with weight back, sand particles, ball trail, threat ring.
+// ============================================================
+
+// ---------- constants ----------
+const G = 22;
+const G_J = 26;
+const JUMP_V = 8;
+const PLAYER_SPEED = 7.5;
+const HIT_RADIUS = 1.15;
+const REACH_GROUND = 2.5;
+const WIN_SCORE = 15;
+
+const RESP_GROUND = 9;
+const RESP_AIR = 2.5;
+const WINDUP = 0.06;
+const DIVE_SPEED = 12;
+const DIVE_TIME = 0.42;
+const DOWN_TIME = 0.55;
+
+
+// ---------- renderer / scene ----------
+const renderer = new THREE.WebGLRenderer({antialias:false});
+renderer.setPixelRatio(1);
+document.getElementById('game').appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1b2a5e);
+
+const VIEW_H = 22;
+let cam = new THREE.OrthographicCamera(-1,1,1,-1,0.1,200);
+cam.position.set(0,100,0);
+cam.up.set(0,0,-1);
+cam.lookAt(0,0,0);
+
+function resize(){
+  const w=innerWidth,h=innerHeight;
+  renderer.setSize(w,h);
+  const aspect=w/h;
+  cam.top=VIEW_H/2; cam.bottom=-VIEW_H/2;
+  cam.left=-VIEW_H/2*aspect; cam.right=VIEW_H/2*aspect;
+  cam.updateProjectionMatrix();
+}
+addEventListener('resize',resize);
+
+// ---------- courts (venue, active court, camera framing, referees) ----------
+const courts = createCourtController(scene, cam);
+function court(){ return courts.active; }
+const { wx, wz, lz, txFrom } = courts;
+
+function switchCourt(id){
+  if(!courts.switchTo(id))return;
+  setupServe();
+  showToast('COURT · '+court().id.toUpperCase().replace('-',' '));
+  beep(620,0.06,'square',0.07);
+}
+
+const shadowTex = getShadowTex();
+const ballTex = makeTex(8,8,(g)=>{
+  // asymmetric panels: rotation must be readable at a glance
+  g.fillStyle='#fff8e0';g.beginPath();g.arc(4,4,3.6,0,Math.PI*2);g.fill();
+  g.fillStyle='#ffd21f';
+  g.fillRect(1,2,6,1);           // upper band
+  g.fillRect(2,5,5,1);           // lower band, offset
+  g.fillRect(5,1,1,3);           // vertical stub on one side only
+  g.fillStyle='#d8b000';g.fillRect(2,3,1,1);g.fillRect(6,5,1,1);
+  g.fillStyle='#c0c8e0';g.fillRect(1,5,1,1); // cool pixel breaks symmetry
+});
+const markerTex = makeTex(10,6,(g)=>{
+  g.fillStyle='#ffffff';
+  g.fillRect(0,0,10,2);g.fillRect(3,2,4,2);g.fillRect(4,4,2,2);
+});
+function ringTex(color){return makeTex(16,16,(g)=>{
+  g.clearRect(0,0,16,16);
+  g.strokeStyle=color;g.lineWidth=2;
+  g.beginPath();g.arc(8,8,6,0,Math.PI*2);g.stroke();
+  g.fillStyle='#ffffff';
+  g.fillRect(7,0,2,3);g.fillRect(7,13,2,3);g.fillRect(0,7,3,2);g.fillRect(13,7,3,2);
+});}
+const landTexHot = ringTex('#ff4444');   // incoming attack: hard bump ahead
+const landTexSoft= ringTex('#ffd21f');   // soft ball: composed reception
+
+const players=createPlayers(scene);
+
+const ballShadow=flatPlane(0.6,0.32,shadowTex);ballShadow.position.y=0.045;scene.add(ballShadow);
+const ballSpr=flatPlane(0.55,0.55,ballTex);ballSpr.position.y=0.12;scene.add(ballSpr);
+const marker=flatPlane(0.6,0.4,markerTex);marker.position.y=0.13;scene.add(marker);
+const landMark=flatPlane(0.9,0.9,landTexSoft);landMark.position.y=0.055;landMark.visible=false;scene.add(landMark);
+// referees live in js/court/officials.js; this drives the arm sweep
+let authT=0;   // service-authorization sweep timer
+
+// --- ball trail (ghosts shown on hard-driven balls) ---
+const trailMeshes=[];
+for(let i=0;i<4;i++){
+  const mat=new THREE.MeshBasicMaterial({map:ballTex,transparent:true,opacity:0.26-i*0.055,depthWrite:false});
+  const m=new THREE.Mesh(new THREE.PlaneGeometry(0.5,0.5),mat);
+  m.rotation.x=-Math.PI/2;m.visible=false;m.position.y=0.11;
+  scene.add(m);trailMeshes.push(m);
+}
+const ballHist=[];
+
+// --- sand particles ---
+const puffTex=makeTex(3,3,(g)=>{g.fillStyle='#f5e3b0';g.fillRect(0,0,3,3);g.fillStyle='#dcc07a';g.fillRect(1,1,1,1);});
+const puffs=[];
+for(let i=0;i<28;i++){
+  const m=flatPlane(0.22,0.22,puffTex);
+  m.visible=false;m.position.y=0.06;scene.add(m);
+  puffs.push({m,life:0,vx:0,vz:0});
+}
+function sandPuff(x,z,n,pow=1){
+  let c=0;
+  for(const q of puffs){
+    if(q.life<=0){
+      q.life=0.22+Math.random()*0.16;
+      q.m.visible=true;
+      q.m.position.set(x+rnd(0.25),0.06,z+rnd(0.25));
+      const a=Math.random()*Math.PI*2, s=(1.5+Math.random()*2.5)*pow;
+      q.vx=Math.cos(a)*s;q.vz=Math.sin(a)*s;
+      if(++c>=n)break;
+    }
+  }
+}
+function updatePuffs(dt){
+  for(const q of puffs){
+    if(q.life>0){
+      q.life-=dt;
+      q.m.position.x+=q.vx*dt;q.m.position.z+=q.vz*dt;
+      const s=Math.max(0.1,q.life*4.5);
+      q.m.scale.set(s,s,1);
+      if(q.life<=0)q.m.visible=false;
+    }
+  }
+}
+
+// ---------- audio ----------
+let AC=null;
+function beep(f,d=0.07,type='square',v=0.08){
+  try{
+    AC=AC||new (window.AudioContext||window.webkitAudioContext)();
+    const o=AC.createOscillator(),g=AC.createGain();
+    o.type=type;o.frequency.value=f;
+    g.gain.setValueAtTime(v,AC.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001,AC.currentTime+d);
+    o.connect(g);g.connect(AC.destination);
+    o.start();o.stop(AC.currentTime+d);
+  }catch(e){}
+}
+
+// ---------- game state ----------
+const ball={x:0,y:1,z:6.5,vx:0,vy:0,vz:0,live:false,
+            lastSide:SIDE_USA,touches:0,lastToucher:null,chainQ:0.7,
+            spin:0,spinRate:0,wobble:false};
+let score={usa:0,swe:0};
+let state='serve';
+let servingSide=SIDE_USA;
+const banner=document.getElementById('banner');
+const scoreDiv=document.getElementById('score');
+const touchDiv=document.getElementById('touches');
+let pointTimer=0;
+let aftertouch=0;
+let hitstop=0;
+let squashT=0;   // ball squash frames right after a contact
+
+// --- serve authorization: referee window + 8 second rule ---
+const serveBox=document.getElementById('servebox');
+const serveTimeEl=document.getElementById('serveTime');
+const serveBarEl=document.getElementById('serveBar');
+const refIconCv=document.getElementById('refIcon');
+const SERVE_LIMIT=8;
+const SERVE_PREP=3;        // seconds before the referee whistles
+let serveTimer=SERVE_LIMIT;
+let servePhase='prep';     // 'prep' (getting ready) -> 'go' (whistle blown)
+let prepTimer=SERVE_PREP;
+let aiServeAt=2;           // AI waits >=2s after the whistle
+let refBlink=0;
+// beach service order: the same player keeps serving while their team
+// scores; on a side-out the OTHER team serves and alternates its server
+let curServer=null;
+const serveRot={usa:0,swe:0};
+let lastServeSide=null;
+function drawRefIcon(blow){
+  // stylized first referee in profile, whistle to the mouth
+  const g=refIconCv.getContext('2d');
+  g.clearRect(0,0,24,24);
+  const skin='#d9a066', shirt='#f2f2f8', navy='#22307a';
+  g.fillStyle=navy;  g.fillRect(7,3,9,3);   g.fillRect(6,5,3,2);   // cap + visor
+  g.fillStyle=skin;  g.fillRect(8,6,7,6);                          // face
+  g.fillStyle='#222';g.fillRect(9,8,2,1);                          // eye
+  g.fillStyle='#ffd21f';g.fillRect(5,10,4,2);                      // whistle
+  g.fillStyle=skin;  g.fillRect(4,12,4,3);                         // hand holding it
+  g.fillStyle=shirt; g.fillRect(7,12,10,9);                        // chest
+  g.fillStyle=navy;  g.fillRect(7,21,10,3);                        // shorts line
+  if(blow){                                                        // whistle blast marks
+    g.fillStyle='#ffe14d';
+    g.fillRect(1,7,2,1);g.fillRect(0,10,2,1);g.fillRect(1,13,2,1);
+  }
+}
+drawRefIcon(true);
+
+const keys={};
+const btnEdges={bump:false,set:false,atk:false};   // dedicated fundamentals buttons
+addEventListener('keydown',e=>{
+  keys[e.code]=true;
+  if(['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code))e.preventDefault();
+  if(!e.repeat){
+    if(e.code==='KeyZ'||e.code==='KeyJ')btnEdges.bump=true;   // BAGHER / dive
+    if(e.code==='KeyX'||e.code==='KeyK')btnEdges.set=true;    // ALZATA (palleggio o bagher)
+    if(e.code==='KeyC'||e.code==='KeyL')btnEdges.atk=true;    // ATTACCO (salto + schiacciata)
+  }
+  if(e.code==='KeyP'&&pad.connected){cfgOpen?closeCfg():openCfg();return;}
+  if(!e.repeat&&(e.code==='Digit1'||e.code==='Digit2'||e.code==='Digit3')){
+    const ids=['main','side-left','side-right'];
+    const idx=+(e.code.replace('Digit',''))-1;
+    if(ids[idx])switchCourt(ids[idx]);
+    return;
+  }
+  if(state==='over'&&e.code==='Enter'){score={usa:0,swe:0};servingSide=SIDE_USA;setupServe();}
+});
+addEventListener('keyup',e=>keys[e.code]=false);
+
+// ============================================================
+// GAMEPAD (PlayStation-type) — Gamepad API + config wizard
+// Left stick / d-pad = move · one configurable ACTION button
+// Open config with OPTIONS (btn 9) or the C key when connected
+// ============================================================
+const PAD_LABELS={0:'CROSS (X)',1:'CIRCLE (O)',2:'SQUARE',3:'TRIANGLE',
+  4:'L1',5:'R1',6:'L2',7:'R2',8:'SHARE/CREATE',9:'OPTIONS',
+  10:'L3',11:'R3',12:'D-PAD UP',13:'D-PAD DOWN',14:'D-PAD LEFT',15:'D-PAD RIGHT',16:'PS'};
+function padLabel(i){return PAD_LABELS[i]||('BUTTON '+i);}
+
+const pad={connected:false,index:null,id:'',btnBump:0,btnSet:2,btnAtk:1,dz:0.28,prev:[]};
+const padInput={mx:0,mz:0,bumpPressed:false,setPressed:false,atkPressed:false};
+let cfgOpen=false, cfgStage=0;
+const toast=document.getElementById('toast');
+const padcfg=document.getElementById('padcfg');
+const padcfgInner=document.getElementById('padcfgInner');
+let toastT=null;
+
+function showToast(msg,ms=4500){
+  toast.textContent=msg;toast.style.display='block';
+  clearTimeout(toastT);toastT=setTimeout(()=>toast.style.display='none',ms);
+}
+
+addEventListener('gamepadconnected',e=>{
+  pad.connected=true;pad.index=e.gamepad.index;
+  pad.id=(e.gamepad.id||'GAMEPAD').slice(0,28).toUpperCase();
+  pad.prev=[];
+  showToast('PAD CONNECTED: '+pad.id+' · '+padLabel(pad.btnBump)+'=BUMP '+padLabel(pad.btnSet)+'=SET '+padLabel(pad.btnAtk)+'=ATTACK · OPTIONS/P TO CONFIGURE');
+  beep(700,0.08,'square',0.07);
+});
+addEventListener('gamepaddisconnected',e=>{
+  if(e.gamepad.index===pad.index){
+    pad.connected=false;pad.index=null;
+    if(cfgOpen)closeCfg();
+    showToast('PAD DISCONNECTED — KEYBOARD ACTIVE');
+  }
+});
+
+let padApiOk=true;
+function padGp(){
+  if(!pad.connected||!padApiOk)return null;
+  try{
+    const gps=navigator.getGamepads?navigator.getGamepads():[];
+    return gps[pad.index]||null;
+  }catch(err){
+    // sandboxed iframes (like embedded previews) block the Gamepad API:
+    // fail gracefully, fall back to keyboard, tell the player why
+    padApiOk=false;pad.connected=false;
+    if(cfgOpen)closeCfg();
+    showToast('GAMEPAD BLOCKED IN THIS EMBEDDED VIEW — DOWNLOAD & OPEN THE FILE DIRECTLY IN YOUR BROWSER',7000);
+    return null;
+  }
+}
+
+function openCfg(){
+  if(!pad.connected)return;
+  cfgOpen=true;cfgStage=1;
+  padcfg.style.display='block';
+  renderCfg();
+  beep(520,0.06,'square',0.07);
+}
+function closeCfg(){
+  cfgOpen=false;
+  padcfg.style.display='none';
+  beep(760,0.08,'square',0.08);
+}
+function renderCfg(){
+  const step=(n,name,desc)=>'<h2>PAD SETUP '+n+'/4</h2>'+
+    '<div class="row">'+pad.id+'</div>'+
+    '<div class="row" style="margin-top:14px;font-size:17px">PRESS THE BUTTON FOR<br><span class="hl">'+name+'</span></div>'+
+    '<div class="row" style="font-size:12px">'+desc+'</div>'+
+    '<div class="hint">MOVE: LEFT STICK / D-PAD (fixed) · OPTIONS = CANCEL</div>';
+  if(cfgStage===1){
+    padcfgInner.innerHTML=step(1,'BUMP / RECEPTION','bagher & diving save');
+  }else if(cfgStage===2){
+    padcfgInner.innerHTML=step(2,'SET','palleggio · bump-set on low balls');
+  }else if(cfgStage===3){
+    padcfgInner.innerHTML=step(3,'ATTACK','jump, then press again to spike');
+  }else{
+    padcfgInner.innerHTML=
+      '<h2>PAD SETUP 4/4</h2>'+
+      '<div class="row">MOVE: <span class="hl">LEFT STICK / D-PAD</span></div>'+
+      '<div class="row">BUMP: <span class="hl">'+padLabel(pad.btnBump)+'</span></div>'+
+      '<div class="row">SET: <span class="hl">'+padLabel(pad.btnSet)+'</span></div>'+
+      '<div class="row">ATTACK: <span class="hl">'+padLabel(pad.btnAtk)+'</span></div>'+
+      '<div class="row">STICK DEADZONE: <span class="hl">'+pad.dz.toFixed(2)+'</span> (D-PAD ◄ ► TO ADJUST)</div>'+
+      '<div class="row" style="margin-top:14px">MOVE THE STICK TO TEST: <span class="hl" id="stickTest">·</span></div>'+
+      '<div class="hint">PRESS <span class="hl">'+padLabel(pad.btnBump)+'</span> TO CONFIRM · OPTIONS TO REMAP</div>';
+  }
+}
+
+// per-frame gamepad poll: fills padInput and drives the config wizard
+function pollPad(){
+  padInput.mx=0;padInput.mz=0;
+  padInput.bumpPressed=false;padInput.setPressed=false;padInput.atkPressed=false;
+  const gp=padGp();
+  if(!gp)return;
+  // edge detection over all buttons
+  const pressed=[];
+  gp.buttons.forEach((b,i)=>{
+    const now=b.pressed||b.value>0.5;
+    if(now&&!pad.prev[i])pressed.push(i);
+    pad.prev[i]=now;
+  });
+
+  if(pressed.includes(9)){            // OPTIONS toggles / cancels / remaps
+    if(!cfgOpen)openCfg();
+    else if(cfgStage===4){cfgStage=1;renderCfg();}
+    else closeCfg();
+    return;
+  }
+
+  if(cfgOpen){
+    if(cfgStage<=3){
+      // capture one distinct button per fundamental
+      const used=[];
+      if(cfgStage>1)used.push(pad.btnBump);
+      if(cfgStage>2)used.push(pad.btnSet);
+      const b=pressed.find(i=>i!==9&&i!==16&&i<12&&!used.includes(i));
+      if(b!==undefined){
+        if(cfgStage===1)pad.btnBump=b;
+        else if(cfgStage===2)pad.btnSet=b;
+        else pad.btnAtk=b;
+        cfgStage++;renderCfg();beep(620,0.05,'square',0.07);
+      }
+    }else{
+      if(pressed.includes(14)){pad.dz=Math.max(0.10,+(pad.dz-0.04).toFixed(2));renderCfg();}
+      if(pressed.includes(15)){pad.dz=Math.min(0.50,+(pad.dz+0.04).toFixed(2));renderCfg();}
+      const t=document.getElementById('stickTest');
+      if(t){
+        const ax=gp.axes[0]||0, az=gp.axes[1]||0;
+        const on=Math.hypot(ax,az)>pad.dz;
+        t.textContent=on?('x:'+ax.toFixed(2)+' y:'+az.toFixed(2)):'· (in deadzone)';
+      }
+      if(pressed.includes(pad.btnBump)){
+        closeCfg();
+        showToast('PAD READY · '+padLabel(pad.btnBump)+'=BUMP '+padLabel(pad.btnSet)+'=SET '+padLabel(pad.btnAtk)+'=ATTACK');
+      }
+    }
+    return; // while configuring, no game input
+  }
+
+  // ---- gameplay input ----
+  let ax=gp.axes[0]||0, az=gp.axes[1]||0;
+  if(Math.hypot(ax,az)<pad.dz){ax=0;az=0;}
+  // d-pad overrides
+  if(pad.prev[14])ax=-1; if(pad.prev[15])ax=1;
+  if(pad.prev[12])az=-1; if(pad.prev[13])az=1;
+  padInput.mx=clamp(ax,-1,1);
+  padInput.mz=clamp(az,-1,1);
+  padInput.bumpPressed=pressed.includes(pad.btnBump);
+  padInput.setPressed=pressed.includes(pad.btnSet);
+  padInput.atkPressed=pressed.includes(pad.btnAtk);
+}
+
+function setHUD(){
+  scoreDiv.innerHTML=`<span class="usa">USA ${score.usa}</span> — <span class="swe">${score.swe} SWE</span>`;
+}
+function setTouchHUD(){
+  if(state!=='rally'||!ball.live){touchDiv.textContent='';return;}
+  const who=ball.lastSide===SIDE_USA?'USA':'SWE';
+  const n=Math.min(ball.touches,3);
+  touchDiv.textContent=who+' '+'●'.repeat(n)+'○'.repeat(3-n);
+}
+function showBanner(t){banner.textContent=t;banner.style.display='block';}
+function hideBanner(){banner.style.display='none';}
+function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
+function rnd(a){return (Math.random()*2-1)*a;}
+// angle so the sprite's "up" (arms/platform) points at (tx,tz)
+function faceAngle(p,tx,tz){return Math.atan2(-(tx-p.x),-(tz-p.z));}
+
+function setupServe(){
+  state='serve';
+  ball.live=false;ball.touches=0;aftertouch=0;ball.chainQ=0.7;
+  ball.lastToucher=null;hitstop=0;squashT=0;ballHist.length=0;
+  const homes=court().getPlayerHomesWorld();
+  players.forEach((p,i)=>{
+    p.x=homes[i][0];p.z=homes[i][1];p.home={x:homes[i][0],z:homes[i][1]};
+    p.air=false;p.jumpH=0;p.jumpV=0;p.cool=0;
+    p.vx=0;p.vz=0;p.windup=0;p.diveT=0;p.downT=0;
+    p.poseKind='idle';p.poseT=0;p.ready=false;
+  });
+  // fresh match: reset the service order
+  if(score.usa===0&&score.swe===0){lastServeSide=null;serveRot.usa=0;serveRot.swe=0;}
+  // side-out: the team gaining serve alternates its server
+  if(lastServeSide!==null&&servingSide!==lastServeSide){
+    if(servingSide===SIDE_USA)serveRot.usa^=1; else serveRot.swe^=1;
+  }
+  lastServeSide=servingSide;
+  const teamIdx = servingSide===SIDE_USA?[0,1]:[2,3];
+  const rot = servingSide===SIDE_USA?serveRot.usa:serveRot.swe;
+  curServer = players[teamIdx[rot]];
+  const partner = players[teamIdx[1-rot]];
+  curServer.x=wx(1.5);curServer.z=wz(servingSide,court().half+0.8);   // behind the end line
+  partner.x=wx(-1.0);partner.z=wz(servingSide,1.6);             // partner up at the net
+  ball.x=curServer.x;ball.z=curServer.z-servingSide*0.5;ball.y=1;
+  ball.vx=ball.vy=ball.vz=0;
+  ball.lastSide=servingSide;
+  setHUD();setTouchHUD();
+  if(score.usa>=WIN_SCORE||score.swe>=WIN_SCORE){
+    state='over';
+    showBanner((score.usa>WIN_SCORE-1?'USA WINS THE MATCH!':'SWEDEN WINS THE MATCH!')+'\nPRESS ENTER TO REPLAY');
+  }else{
+    servePhase='prep';prepTimer=SERVE_PREP;   // players get set first...
+    serveTimer=SERVE_LIMIT;refBlink=0;
+    aiServeAt=2+Math.random()*1.5;            // ...AI waits 2s+ after the whistle
+    showBanner(servingSide===SIDE_USA?'USA TO SERVE\nPRESS SPACE':'SWEDEN SERVING…');
+  }
+}
+
+// ---------- ball launch ----------
+function hitBall(px,pz,tx,tz,vyUp,hard,power=1,inherit=0){
+  const inVx=ball.vx, inVz=ball.vz;
+  const y0=Math.max(ball.y,0.2);
+  const T=(vyUp+Math.sqrt(vyUp*vyUp+2*G*y0))/G;
+  ball.vx=((tx-px)/T*power)*(1-inherit)+inVx*inherit;
+  ball.vz=((tz-pz)/T*power)*(1-inherit)+inVz*inherit;
+  ball.vy=vyUp;
+  ball.live=true;
+  // spin: spikes rip, soft touches roll; sign follows the lateral direction
+  const sgn=Math.sign(ball.vx||((Math.random()<0.5)?1:-1));
+  ball.spinRate=(hard?15:6.5)*sgn*(0.7+Math.random()*0.5);
+  ball.wobble=false;   // float serves opt back in after the call
+  squashT=0.07;
+  if(hard)hitstop=Math.max(hitstop,0.055);
+  beep(hard?200:340,0.06,'square',hard?0.11:0.08);
+}
+
+// ---------- rules ----------
+function registerTouch(p){
+  if(ball.lastSide!==p.side){ ball.touches=0; ball.lastToucher=null; }
+  if(ball.lastToucher===p){
+    pointTo(-p.side,'DOUBLE TOUCH!');
+    return false;
+  }
+  ball.touches++;
+  if(ball.touches>3){
+    pointTo(-p.side,'FOUR TOUCHES!');
+    return false;
+  }
+  ball.lastToucher=p;
+  ball.lastSide=p.side;
+  setTouchHUD();
+  return true;
+}
+
+function pointTo(side,msg){
+  state='point';pointTimer=1.6;
+  serveBox.style.display='none';
+  if(side===SIDE_USA)score.usa++;else score.swe++;
+  servingSide=side;
+  setHUD();touchDiv.textContent='';
+  showBanner((side===SIDE_USA?'POINT USA!':'POINT SWEDEN!')+'\n'+msg);
+  beep(2300,0.09,'square',0.06);setTimeout(()=>beep(2300,0.14,'square',0.06),120); // whistle
+  beep(660,0.12,'square',0.1);setTimeout(()=>beep(880,0.15,'square',0.1),110);
+}
+
+function landingPoint(){
+  if(!ball.live)return {x:ball.x,z:ball.z,t:0};
+  const a=-0.5*G,b=ball.vy,c=ball.y;
+  const disc=b*b-4*a*c;
+  const t=(-b-Math.sqrt(Math.max(disc,0)))/(2*a);
+  return {x:ball.x+ball.vx*t, z:ball.z+ball.vz*t, t};
+}
+// ============================================================
+// SHOTS
+// ============================================================
+
+function startJump(p){
+  if(p.air)return;
+  p.air=true;p.jumpV=JUMP_V;
+  beep(500,0.04,'triangle',0.05);
+}
+
+function startDive(p){
+  const lp=landingPoint();
+  let dx=lp.x-p.x, dz=lp.z-p.z;
+  const d=Math.hypot(dx,dz)||1;
+  p.vx=dx/d*DIVE_SPEED; p.vz=dz/d*DIVE_SPEED;
+  p.diveT=DIVE_TIME; p.diveDx=dx;
+  sandPuff(p.x,p.z,5,1.0);
+  beep(300,0.05,'triangle',0.06);
+}
+
+function diveTouch(p){
+  if(!registerTouch(p))return;
+  p.diveT=0;p.downT=DOWN_TIME;
+  p.poseKind='dig';p.poseT=DOWN_TIME;
+  ball.chainQ=0.25;
+  hitstop=Math.max(hitstop,0.03);
+  sandPuff(p.x,p.z,7,1.2);
+  const tx=txFrom(p, rnd(2.4), -3.4, 3.4);
+  const tz=wz(p.side, 2.0+Math.random()*2.5);
+  hitBall(p.x,p.z,tx,tz,11+rnd(1),false,1,0.5);
+  beep(430,0.08,'triangle',0.09);
+}
+
+// standing touch. mode: 'auto' (context decides, legacy Space),
+// 'bump' (dedicated BUMP button), 'set' (dedicated SET button).
+// Using the wrong fundamental on the wrong ball costs quality:
+// hand-setting a driven ball is heavily penalized; bumping an easy
+// ball is legal but slightly less precise than a clean set.
+function groundTouch(p,mx,mz,mode='auto'){
+  const dist=Math.hypot(ball.x-p.x,ball.z-p.z);
+  let q=Math.max(0.15, 1-dist/HIT_RADIUS);
+  const ivx=ball.vx, ivz=ball.vz;
+  const hsp=Math.hypot(ivx,ivz);
+  let cushion=0;
+  if(hsp>0.5){
+    const inx=ivx/hsp, inz=ivz/hsp;
+    cushion=clamp(mx*inx+mz*inz,-1,1)*0.5;   // + soft hands, − stiff arms
+  }
+  if(!registerTouch(p))return;
+  p.cool=0.35;
+  p.faceA=faceAngle(p,ball.x,ball.z);
+
+  // resolve the actual touch from button intent + ball state
+  let kind;
+  if(ball.touches>=3)kind='free';
+  else if(mode==='bump')kind=(hsp>6.0||ball.y<1.3)?'recv':'bumpctrl';
+  else if(mode==='set')kind=(hsp>7.0)?'ovdig':(ball.y<1.35?'bumpset':'set');
+  else kind=(hsp>6.0||ball.y<1.3)?'recv':'set';
+
+  if(kind==='free'){
+    // third touch from the ground = safe free ball over
+    p.poseKind='bump';p.poseT=0.18;
+    const tx=txFrom(p, mx*2.5+rnd(1.2), -3.4, 3.4);
+    const tz=wz(-p.side, 2.5+Math.random()*3.5);
+    hitBall(p.x,p.z,tx,tz,9,false,1,0.12);
+  }else if(kind==='recv'){
+    q=clamp(q+cushion*0.25,0.1,1);
+    ball.chainQ=q;
+    const hard=hsp>9;
+    p.poseKind=hard?'dig':'bump'; p.poseT=0.2;
+    const give=(hard?0.12:0.07)*(1+cushion);
+    p.vx+=ivx*give; p.vz+=ivz*give;
+    if(hard){
+      sandPuff(p.x,p.z,6,1.1);
+      const tx=txFrom(p, mx*0.8+rnd((1-q)*1.6), -3.4, 3.4);
+      const tz=wz(p.side, clamp(Math.abs(lz(p.z))-1.5+rnd((1-q)*1.2),1.2,court().half-0.8));
+      hitBall(p.x,p.z,tx,tz,12,false,1,Math.max(0,Math.min(0.45,(1-q)*0.5-cushion*0.15)));
+    }else{
+      const tx=txFrom(p, mx*1.8+rnd((1-q)*1.8), -2.6, 2.6);
+      const tz=wz(p.side, 1.8+rnd((1-q)*0.9));
+      hitBall(p.x,p.z,tx,tz,10.5,false,1,Math.max(0,Math.min(0.5,(1-q)*0.55-cushion*0.15)));
+    }
+  }else if(kind==='bumpctrl'){
+    // controlled bump on an easy ball: legit, a touch less precise than a set
+    q=clamp(q+cushion*0.15,0.1,1);
+    ball.chainQ=(ball.chainQ+q*0.92)/2;
+    p.poseKind='bump';p.poseT=0.2;
+    const tx=txFrom(p, mx*2.2+rnd((1-q)*1.4), -2.8, 2.8);
+    const tz=wz(p.side, 1.5+rnd((1-q)*0.8));
+    hitBall(p.x,p.z,tx,tz,10.8,false,1,(1-q)*0.3);
+  }else if(kind==='ovdig'){
+    // hands on a driven ball: badly punished control
+    q*=0.5;
+    ball.chainQ=q;
+    p.poseKind='set';p.poseT=0.2;
+    const give=0.1*(1+cushion);
+    p.vx+=ivx*give; p.vz+=ivz*give;
+    sandPuff(p.x,p.z,4,0.9);
+    const tx=txFrom(p, rnd((1-q)*1.8), -3.4, 3.4);
+    const tz=wz(p.side, clamp(Math.abs(lz(p.z))-1.0+rnd(1.0),1.2,court().half-0.8));
+    hitBall(p.x,p.z,tx,tz,11.5,false,1,Math.min(0.5,(1-q)*0.5));
+  }else if(kind==='bumpset'){
+    // ALZATA IN BAGHER: the low-ball set variant — platform arms,
+    // same set trajectory, slightly less precise than clean hands
+    ball.chainQ=(ball.chainQ+q*0.9)/2;
+    p.poseKind='bump';p.poseT=0.22;
+    const tx=txFrom(p, mx*2.6+rnd((1-q)*1.3), -3.0, 3.0);
+    const tz=wz(p.side, 1.25);
+    hitBall(p.x,p.z,tx,tz,11.5,false,1,(1-q)*0.3);
+  }else{
+    // clean overhead SET
+    p.poseKind='set';p.poseT=0.22;
+    ball.chainQ=(ball.chainQ+q)/2;
+    const tx=txFrom(p, mx*2.6+rnd((1-q)*1.2), -3.0, 3.0);
+    const tz=wz(p.side, 1.25);
+    hitBall(p.x,p.z,tx,tz,11.5,false,1,(1-q)*0.25);
+  }
+  aftertouch=p.side===SIDE_USA?0.5:0;
+}
+
+function trySpike(p,mx,mz){
+  const dist=Math.hypot(ball.x-p.x,ball.z-p.z);
+  if(dist>1.35)return;
+  if(ball.y<1.4||ball.y>p.jumpH+3.2)return;
+  if(!registerTouch(p))return;
+  p.cool=0.4;
+  p.faceA=faceAngle(p,ball.x,ball.z);
+  const hitH=p.jumpH+2.2;
+  const timing=Math.max(0.1, 1-Math.abs(ball.y-hitH)/1.3);
+  const apexQ=Math.min(1,p.jumpH/1.1);
+  const q=timing*apexQ*(0.7+0.3*ball.chainQ);
+  const depth = mz<0? 3.6 : mz>0? 0.6 : 2.0;
+  const tz=wz(-p.side, 1.4+depth+rnd((1-q)*1.6));
+  const tx=txFrom(p, mx*3.4+rnd((1-q)*2.2), -3.6, 3.6);
+  hitBall(p.x,p.z,tx,tz,1.7,true,0.78+0.5*q,0.05);
+  p.poseKind='spikeHit';p.poseT=0.28;   // arm whips down after contact
+  if(p.side===SIDE_USA)aftertouch=0.6;
+}
+
+// ---------- shared movement ----------
+function movePlayer(p,tvx,tvz,dt){
+  if(p.diveT>0){
+    const a=Math.min(1,2.0*dt); p.vx-=p.vx*a; p.vz-=p.vz*a;
+  }else if(p.downT>0){
+    const a=Math.min(1,6*dt); p.vx-=p.vx*a; p.vz-=p.vz*a;
+  }else{
+    const a=Math.min(1,(p.air?RESP_AIR:RESP_GROUND)*dt);
+    p.vx+=(tvx-p.vx)*a; p.vz+=(tvz-p.vz)*a;
+  }
+  p.x+=p.vx*dt; p.z+=p.vz*dt;
+  p.stride=(p.stride||0)+Math.hypot(p.vx,p.vz)*dt;   // drives the leg cycle
+  clampPlayer(p);
+}
+function busy(p){return p.diveT>0||p.downT>0||p.windup>0;}
+
+// ---------- human control ----------
+function humanPlayer(){
+  const lp=landingPoint();
+  const ref=ball.live?lp:ball;
+  let us=players.filter(p=>p.side===SIDE_USA);
+  if(ball.lastToucher&&ball.lastToucher.side===SIDE_USA){
+    const others=us.filter(p=>p!==ball.lastToucher);
+    if(others.length)us=others;
+  }
+  return us.reduce((a,b)=>
+    Math.hypot(a.x-ref.x,a.z-ref.z)<Math.hypot(b.x-ref.x,b.z-ref.z)?a:b);
+}
+
+function updateHuman(dt,p){
+  let mx=0,mz=0;
+  if(keys['ArrowLeft']||keys['KeyA'])mx-=1;
+  if(keys['ArrowRight']||keys['KeyD'])mx+=1;
+  if(keys['ArrowUp']||keys['KeyW'])mz-=1;
+  if(keys['ArrowDown']||keys['KeyS'])mz+=1;
+  // gamepad: analog stick adds fine control, d-pad acts like arrows
+  mx+=padInput.mx; mz+=padInput.mz;
+  const l=Math.max(1,Math.hypot(mx,mz));
+  mx/=l; mz/=l;
+  const maxSp=PLAYER_SPEED*(p.air?0.3:1);
+  movePlayer(p, mx*maxSp, mz*maxSp, dt);
+  p.cool=Math.max(0,p.cool-dt);
+
+  const anyBtn=btnEdges.bump||btnEdges.set||btnEdges.atk;
+  if(keys['Space']||anyBtn){
+    if(state==='serve'&&servingSide===SIDE_USA&&servePhase==='go'){
+      keys['Space']=false;btnEdges.bump=btnEdges.set=btnEdges.atk=false;
+      let tx=ball.x+mx*2.2, tz=wz(-SIDE_USA, 3.5+Math.random()*3);
+      ball.y=2.0;   // struck at full extension: clears the tape with margin
+      hitBall(ball.x,ball.z,tx,tz,8.0,false);
+      ball.spinRate=1.2*Math.sign(rnd(1)||1);ball.wobble=true;  // float serve
+      ball.lastSide=SIDE_USA;ball.touches=1;ball.lastToucher=p;ball.chainQ=0.75;
+      state='rally';hideBanner();aftertouch=0.6;setTouchHUD();
+    }else if(state==='rally'&&p.cool<=0&&!busy(p)){
+      const dist=Math.hypot(ball.x-p.x,ball.z-p.z);
+      const onOurSide=isOnCourtSide(ball.z, p.side, court());
+      const canGround=ball.live&&onOurSide&&dist<HIT_RADIUS&&ball.y<REACH_GROUND&&ball.lastToucher!==p;
+      if(!p.air){
+        if(btnEdges.atk){
+          // ATTACK: jump now, swing on the second press
+          btnEdges.atk=false;
+          startJump(p);
+        }else if(btnEdges.bump){
+          // BUMP: platform touch in reach, diving save out of reach
+          btnEdges.bump=false;
+          if(canGround){
+            p.windup=WINDUP;p.wmx=mx;p.wmz=mz;p.wKind='human';p.wMode='bump';
+            p.faceA=faceAngle(p,ball.x,ball.z);
+          }else if(ball.live&&onOurSide&&ball.lastToucher!==p&&dist<3.0&&ball.y<2.0){
+            startDive(p);
+          }else{
+            p.cool=0.12;   // swung at nothing
+          }
+        }else if(btnEdges.set){
+          // SET: overhead, or bump-set on low balls
+          btnEdges.set=false;
+          if(canGround){
+            p.windup=WINDUP;p.wmx=mx;p.wmz=mz;p.wKind='human';p.wMode='set';
+            p.faceA=faceAngle(p,ball.x,ball.z);
+          }else{
+            p.cool=0.12;
+          }
+        }else if(keys['Space']){
+          // legacy smart button: context decides, like before
+          if(canGround){
+            keys['Space']=false;
+            p.windup=WINDUP;p.wmx=mx;p.wmz=mz;p.wKind='human';p.wMode='auto';
+            p.faceA=faceAngle(p,ball.x,ball.z);
+          }else if(ball.live&&onOurSide&&ball.lastToucher!==p&&dist<3.0&&ball.y<2.0){
+            keys['Space']=false;
+            startDive(p);
+          }else if(lz(p.z)<3.8||(ball.y>2.3&&dist<1.6)){
+            keys['Space']=false;
+            startJump(p);
+          }
+        }
+      }else{
+        // airborne: attack button (or Space) swings
+        if(btnEdges.atk||keys['Space']){
+          btnEdges.atk=false;keys['Space']=false;
+          trySpike(p,mx,mz);
+        }
+      }
+    }
+  }
+}
+
+function clampPlayer(p){ clampPlayerOnCourt(p, court()); }
+
+// ---------- AI ----------
+function pickOpenTarget(side){
+  const opps=players.filter(p=>p.side!==side);
+  let best=targetToWorld(court(), pickTargetLocal(side)), bestD=-1;
+  for(let i=0;i<6;i++){
+    const t=targetToWorld(court(), pickTargetLocal(side));
+    let dmin=1e9;
+    opps.forEach(o=>{dmin=Math.min(dmin,Math.hypot(o.x-t.x,o.z-t.z));});
+    if(dmin>bestD){bestD=dmin;best=t;}
+  }
+  return best;
+}
+
+function updateAI(dt,human){
+  const lp=landingPoint();
+  players.forEach(p=>{
+    if(p===human)return;
+    p.cool=Math.max(0,p.cool-dt);
+    let tx=p.home.x,tz=p.home.z;
+    if(state==='serve'){ tx=p.x; tz=p.z; }   // hold serve formation (server stays behind the line)
+    const ballComing = ball.live && courtSideAtZ(lp.z, court()) === p.side;
+    let myTeam=players.filter(q=>q.side===p.side);
+    if(ball.lastToucher&&ball.lastToucher.side===p.side){
+      const others=myTeam.filter(q=>q!==ball.lastToucher);
+      if(others.length)myTeam=others;
+    }
+    const nearest=myTeam.reduce((a,b)=>
+      Math.hypot(a.x-lp.x,a.z-lp.z)<Math.hypot(b.x-lp.x,b.z-lp.z)?a:b);
+
+    if(ballComing&&nearest===p){
+      tx=lp.x;tz=lp.z;
+      if(!p.air&&!busy(p)&&ball.vy<0&&lp.t<0.4){
+        const d=Math.hypot(lp.x-p.x,lp.z-p.z);
+        if(d>PLAYER_SPEED*0.92*lp.t+0.7&&d<3.2)startDive(p);
+      }
+    }else if(ball.live&&ball.lastSide===p.side&&ball.touches===1&&courtSideAtZ(lp.z, court())===p.side){
+      tx=wx(clamp(lp.x - court().centerX, -2.4, 2.4));tz=wz(p.side, 1.5);
+    }
+    let dx=tx-p.x,dz=tz-p.z;
+    const d=Math.hypot(dx,dz);
+    let tvx=0,tvz=0;
+    if(d>0.06){
+      const s=PLAYER_SPEED*0.92*(p.air?0.3:1)*Math.min(1,d/0.55);
+      tvx=dx/d*s;tvz=dz/d*s;
+    }
+    movePlayer(p,tvx,tvz,dt);
+
+    if(ball.live&&p.cool<=0&&!busy(p)&&ball.lastToucher!==p&&isOnCourtSide(ball.z, p.side, court())){
+      const dist=Math.hypot(ball.x-p.x,ball.z-p.z);
+      if(p.air){
+        if(dist<1.35&&ball.y>1.5&&ball.y<p.jumpH+3.2&&ball.vy<0){
+          aiSpike(p);
+        }
+      }else{
+        const canGround=dist<HIT_RADIUS&&ball.y<REACH_GROUND&&ball.vy<2.5;
+        const setUp=ball.lastSide===p.side&&ball.touches===2;
+        if(setUp&&Math.abs(lz(p.z))<3.6&&dist<1.6&&ball.vy<0&&ball.y<3.8&&ball.y>1.8){
+          startJump(p);
+        }else if(canGround){
+          p.windup=WINDUP+Math.random()*0.04;p.wKind='ai';
+          p.faceA=faceAngle(p,ball.x,ball.z);
+        }
+      }
+    }
+
+    // AI serve: only after the whistle, and never sooner than 2s after it
+    if(state==='serve'&&servingSide===SIDE_SWE&&p===curServer&&servePhase==='go'
+       &&(SERVE_LIMIT-serveTimer)>=aiServeAt){
+      const t=pickOpenTarget(SIDE_SWE);
+      const jumpSrv=Math.random()<0.25;
+      if(jumpSrv){
+        startJump(p);
+        ball.y=2.4;
+        hitBall(ball.x,ball.z,t.x+rnd(0.8),t.z+rnd(0.8),6.0,true,1.0);
+        p.poseKind='spikeHit';p.poseT=0.3;   // serve swing follow-through
+      }else{
+        ball.y=2.0;
+        const dz2=wz(SIDE_USA, clamp(lz(t.z), 3.2, court().half-1.2));
+        hitBall(ball.x,ball.z,t.x+rnd(0.6),dz2+rnd(0.6),8.0,false);
+        ball.spinRate=1.2*Math.sign(rnd(1)||1);ball.wobble=true;  // float serve
+      }
+      ball.lastSide=SIDE_SWE;ball.touches=1;ball.lastToucher=p;ball.chainQ=0.75;
+      state='rally';hideBanner();setTouchHUD();
+    }
+  });
+}
+
+function aiGround(p){
+  const dist=Math.hypot(ball.x-p.x,ball.z-p.z);
+  const ivx=ball.vx, ivz=ball.vz;
+  const hspIn=Math.hypot(ivx,ivz);
+  let q=Math.max(0.3,1-dist/HIT_RADIUS)*(0.75+Math.random()*0.25);
+  q*=clamp(1-(hspIn-8)*0.045,0.55,1);
+  if(!registerTouch(p))return;
+  p.cool=0.5;
+  p.faceA=faceAngle(p,ball.x,ball.z);
+  const hard=hspIn>9;
+  const mate=players.find(m=>m.side===p.side&&m!==p);
+  if(ball.touches>=3){
+    p.poseKind='bump';p.poseT=0.18;
+    const t=pickOpenTarget(p.side);
+    hitBall(p.x,p.z,t.x+rnd(1.2),t.z+rnd(1.2),9,false,1,0.12);
+  }else if(ball.touches===1){
+    p.poseKind=hard?'dig':'bump'; p.poseT=0.2;
+    const give=(hard?0.12:0.07);
+    p.vx+=ivx*give; p.vz+=ivz*give;
+    if(hard)sandPuff(p.x,p.z,6,1.1);
+    const shank=Math.random()<(hspIn>9?0.14:0.05);
+    if(shank){
+      ball.chainQ=0.2;
+      hitBall(p.x,p.z, txFrom(p, rnd(3.2), -4.2, 4.2), wz(p.side, 1.0+Math.random()*4)+rnd(1.5), 10+rnd(2), false,1,0.5);
+      beep(260,0.07,'sawtooth',0.08);
+    }else if(hard){
+      // defensive dig: pop it high near the spot, weight back
+      ball.chainQ=q;
+      const tx=txFrom(p, rnd((1-q)*1.6), -3.4, 3.4);
+      const tz=wz(p.side, clamp(Math.abs(lz(p.z))-1.5+rnd((1-q)*1.2),1.2,court().half-0.8));
+      hitBall(p.x,p.z,tx,tz,12,false,1,Math.min(0.45,(1-q)*0.5));
+    }else{
+      ball.chainQ=q;
+      hitBall(p.x,p.z, txFrom(p, p.x*0.4 - (p.x - court().centerX)*0.6 + rnd((1-q)*1.6), -2.4, 2.4), wz(p.side, 1.7+rnd((1-q)*0.8)), 10.5,false,1,Math.min(0.5,(1-q)*0.55));
+    }
+  }else{
+    if(Math.abs(p.z)<2.6&&ball.y>1.6&&Math.random()<0.15){
+      p.poseKind='set';p.poseT=0.22;
+      const t=pickOpenTarget(p.side);
+      hitBall(p.x,p.z,t.x+rnd(1.0),t.z+rnd(1.0),5.5,false,0.95,0.08);
+      beep(560,0.05,'triangle',0.07);
+      return;
+    }
+    p.poseKind='set';p.poseT=0.22;
+    ball.chainQ=(ball.chainQ+q)/2;
+    let sz=wz(p.side, 1.25);
+    if(Math.random()<0.10){ sz=wz(p.side, 0.55+Math.random()*0.3); ball.chainQ*=0.8; }
+    hitBall(p.x,p.z, wx(clamp(mate.x - court().centerX + rnd((1-q)*0.8), -2.6, 2.6)), sz, 11.5,false,1,(1-q)*0.25);
+  }
+}
+
+function aiSpike(p){
+  if(!registerTouch(p))return;
+  p.cool=0.5;
+  p.faceA=faceAngle(p,ball.x,ball.z);
+  p.poseKind='spikeHit';p.poseT=0.28;   // follow-through
+  const timing=Math.max(0.2,1-Math.abs(ball.y-(p.jumpH+2.2))/1.3);
+  const q=timing*(0.6+Math.random()*0.35)*(0.7+0.3*ball.chainQ);
+  const dropProb=0.18+(1-ball.chainQ)*0.25;
+  if(Math.random()<dropProb){
+    const tx=txFrom(p, rnd(2.0), -3.2, 3.2);
+    const tz=wz(-p.side, 1.1+Math.random()*0.9);
+    hitBall(p.x,p.z,tx,tz,4.6,false,0.9,0.03);
+    beep(520,0.05,'triangle',0.07);
+    return;
+  }
+  const t=pickOpenTarget(p.side);
+  if(Math.random()<0.15){t.x=wx(Math.sign(t.x-court().centerX||1)*(court().width/2-0.15+rnd(0.5)));}
+  hitBall(p.x,p.z,t.x+rnd((1-q)*2),t.z+rnd((1-q)*2),1.7,true,0.78+0.5*q,0.05);
+}
+
+// ---------- wind-ups & dives ----------
+function updateActions(dt){
+  players.forEach(p=>{
+    if(p.poseT>0)p.poseT-=dt;
+    if(p.windup>0){
+      p.windup-=dt;
+      p.faceA=faceAngle(p,ball.x,ball.z);   // track the ball while coiling
+      if(p.windup<=0){
+        const dist=Math.hypot(ball.x-p.x,ball.z-p.z);
+        if(ball.live&&dist<HIT_RADIUS*1.3&&ball.y<REACH_GROUND+0.2&&ball.lastToucher!==p){
+          if(p.wKind==='human')groundTouch(p,p.wmx,p.wmz,p.wMode||'auto');
+          else aiGround(p);
+        }else{
+          p.cool=Math.max(p.cool,0.18);
+        }
+      }
+    }
+    if(p.diveT>0){
+      p.diveT-=dt;
+      const dist=Math.hypot(ball.x-p.x,ball.z-p.z);
+      if(ball.live&&dist<1.05&&ball.y<1.7&&ball.lastToucher!==p&&isOnCourtSide(ball.z, p.side, court())){
+        diveTouch(p);
+      }else if(p.diveT<=0){
+        p.downT=DOWN_TIME;
+      }
+    }else if(p.downT>0){
+      p.downT-=dt;
+    }
+  });
+}
+
+// anticipation: whoever is about to receive coils into the ready pose
+function updateReady(){
+  players.forEach(p=>p.ready=false);
+  if(!ball.live)return;
+  const lp=landingPoint();
+  players.forEach(p=>{
+    if(p.air||busy(p)||p.poseT>0)return;
+    if(courtSideAtZ(lp.z, court())!==p.side)return;
+    if(ball.lastToucher===p)return;
+    const d=Math.hypot(lp.x-p.x,lp.z-p.z);
+    if(d<2.2&&lp.t<0.8){
+      p.ready=true;
+      p.faceA=faceAngle(p,ball.x,ball.z);
+    }
+  });
+}
+
+// ---------- jump physics ----------
+function updateJumps(dt){
+  players.forEach(p=>{
+    if(p.air){
+      p.jumpV-=G_J*dt;
+      p.jumpH+=p.jumpV*dt;
+      if(p.jumpH<=0){
+        p.jumpH=0;p.jumpV=0;p.air=false;
+        p.cool=Math.max(p.cool,0.15);
+        sandPuff(p.x,p.z,4,0.8);
+      }
+    }
+  });
+}
+
+// ---------- ball physics ----------
+function updateBall(dt){
+  if(!ball.live)return;
+  if(aftertouch>0){
+    aftertouch-=dt;
+    if(keys['ArrowLeft']||keys['KeyA']||padInput.mx<-0.35){ball.vx-=13*dt;ball.spinRate-=30*dt;}
+    if(keys['ArrowRight']||keys['KeyD']||padInput.mx>0.35){ball.vx+=13*dt;ball.spinRate+=30*dt;}
+  }
+  // spin: integrate rotation, bleed off slowly with the air
+  ball.spin+=ball.spinRate*dt;
+  ball.spinRate-=ball.spinRate*0.25*dt;
+  // float-serve knuckle: a no-spin ball drifts unpredictably
+  if(ball.wobble&&Math.hypot(ball.vx,ball.vz)>5){
+    ball.vx+=rnd(4.5)*dt;
+  }
+  const hsp=Math.hypot(ball.vx,ball.vz);
+  const k=Math.min(0.9,0.015*hsp);
+  ball.vx-=ball.vx*k*dt;
+  ball.vz-=ball.vz*k*dt;
+
+  const prevZ=ball.z;
+  ball.vy-=G*dt;
+  ball.x+=ball.vx*dt;
+  ball.z+=ball.vz*dt;
+  ball.y+=ball.vy*dt;
+
+  const netEvt=netCrossEvent(prevZ, ball.z, ball.x, ball.y, ball.vy, dt, court());
+  if(netEvt){
+    if(netEvt.tapeClip){
+        // NET CORD: clipped the tape — the ball is LIVE (beach rule):
+        // it bleeds speed, pops off the band and usually dribbles over
+        ball.vz*=(0.18+Math.random()*0.3);
+        if(Math.random()<0.25)ball.vz*=-0.6;   // sometimes it falls back
+        ball.vx*=0.7;
+        ball.vy=1.2+rnd(1.2);
+        ball.spinRate*=0.4;
+        ball.wobble=false;
+        beep(180,0.06,'sawtooth',0.09);
+      }else{
+        // into the body of the net: dies on the hitter's side
+        const prevRel=prevZ-court().centerZ;
+        ball.z=court().centerZ+prevRel*0.15+Math.sign(prevRel)*0.12;
+        ball.vz*=-0.25;ball.vx*=0.5;ball.vy=Math.min(ball.vy,0);
+        beep(140,0.08,'sawtooth',0.1);
+      }
+  }
+
+  if(ball.y<=0){
+    ball.y=0;ball.live=false;
+    sandPuff(ball.x,ball.z,6,1.0);
+    beep(90,0.1,'sawtooth',0.12);
+    if(state!=='rally'&&state!=='serve')return;
+    const inside=inCourt(ball.x,ball.z,court());
+    if(!inside){
+      pointTo(-ball.lastSide,'BALL OUT!');
+    }else{
+      const sideLanded=courtSideAtZ(ball.z, court())||SIDE_USA;
+      pointTo(-sideLanded,'SAND POINT!');
+    }
+  }
+}
+
+// ---------- render sync ----------
+function sync(){
+  players.forEach(syncPlayerSprite);
+
+  ballShadow.position.set(ball.x,0.045,ball.z);
+  let s=1+ball.y*0.10;
+  if(squashT>0){ballSpr.scale.set(s*1.25,s*0.72,1);}   // contact squash
+  else ballSpr.scale.set(s,s,1);
+  ballSpr.rotation.z=ball.spin;
+  ballSpr.position.set(ball.x,0.12,ball.z-ball.y*0.12);
+  const sh=Math.max(0.25,0.6-ball.y*0.05);
+  ballShadow.scale.set(sh/0.6,sh/0.6,1);
+
+  const h=humanPlayer();
+  marker.position.set(h.x,0.13,h.z-1.0);
+
+  courts.officials.update({
+    signal: state==='point',
+    authT: state==='serve'?authT:0,
+    servingSide,
+    ballZ: ball.z,
+  });
+
+  // landing ring: color signals the kind of bump you'll need
+  if(ball.live){
+    const lp=landingPoint();
+    const hot=Math.hypot(ball.vx,ball.vz)>8;
+    landMark.material.map=hot?landTexHot:landTexSoft;
+    landMark.visible=true;
+    landMark.position.set(lp.x,0.055,lp.z);
+    const ms=0.5+Math.min(lp.t,1.2)*0.8;
+    landMark.scale.set(ms,ms,1);
+  }else{
+    landMark.visible=false;
+  }
+
+  // trail ghosts on hard-driven balls
+  const hspNow=Math.hypot(ball.vx,ball.vz);
+  trailMeshes.forEach((m,i)=>{
+    const hrec=ballHist[(i+1)*3];
+    const show=ball.live&&hspNow>9&&hrec;
+    m.visible=!!show;
+    if(show){
+      m.position.set(hrec.x,0.11,hrec.z-hrec.y*0.12);
+      m.rotation.z=ball.spin-(i+1)*0.45*Math.sign(ball.spinRate||1);
+      const ss=(1+hrec.y*0.10)*0.9;
+      m.scale.set(ss,ss,1);
+    }
+  });
+}
+
+// ---------- main loop ----------
+let last=performance.now();
+function loop(now){
+  requestAnimationFrame(loop);
+  let dt=Math.min((now-last)/1000,0.033);last=now;
+
+  pollPad();
+  // merge pad presses into the shared button intents
+  if(!cfgOpen){
+    btnEdges.bump=btnEdges.bump||padInput.bumpPressed;
+    btnEdges.set =btnEdges.set ||padInput.setPressed;
+    btnEdges.atk =btnEdges.atk ||padInput.atkPressed;
+    if(state==='over'&&(btnEdges.bump||btnEdges.set||btnEdges.atk)){
+      btnEdges.bump=btnEdges.set=btnEdges.atk=false;
+      score={usa:0,swe:0};servingSide=SIDE_USA;setupServe();
+    }
+  }
+
+  if(cfgOpen){ sync(); renderer.render(scene,cam); return; }  // paused while configuring
+
+  if(hitstop>0){hitstop-=dt;dt=0;}
+  if(squashT>0)squashT-=Math.max(dt,0.0001);
+  if(authT>0)authT-=Math.max(dt,0.0001);
+
+  if(state==='point'){
+    pointTimer-=dt;
+    if(pointTimer<=0)setupServe();
+  }
+
+  if(state==='serve'||state==='rally'){
+    // referee window + 8 second service rule (after a 3s prep phase)
+    if(state==='serve'){
+      if(servePhase==='prep'){
+        serveBox.style.display='none';
+        prepTimer-=dt;
+        if(prepTimer<=0){
+          servePhase='go';
+          serveTimer=SERVE_LIMIT;
+          authT=REF_AUTH_TIME;              // arm sweeps from server to net
+          beep(2300,0.12,'square',0.07);   // referee whistles: service authorized
+        }
+      }else{
+        serveBox.style.display='block';
+        serveTimer-=dt;
+        refBlink+=dt;
+        if(refBlink>0.5)refBlink=0;
+        drawRefIcon(refBlink<0.3);
+        const tLeft=Math.max(0,serveTimer);
+        serveTimeEl.textContent=Math.ceil(tLeft);
+        serveBarEl.style.width=(tLeft/SERVE_LIMIT*100)+'%';
+        serveBarEl.style.background=tLeft<3?'#ff5a5a':'#7bff6e';
+        if(serveTimer<=0){
+          serveBox.style.display='none';
+          pointTo(-servingSide,'8 SECONDS!');   // delay of service
+        }
+      }
+    }else{
+      serveBox.style.display='none';
+    }
+
+    const h=humanPlayer();
+    updateHuman(dt,h);
+    updateAI(dt,h);
+    updateActions(dt);
+    updateJumps(dt);
+    updateBall(dt);
+    updateReady();
+    if(ball.live){
+      ballHist.unshift({x:ball.x,z:ball.z,y:ball.y});
+      if(ballHist.length>14)ballHist.pop();
+    }
+    if(state==='serve'&&curServer){
+      ball.x=curServer.x;ball.z=curServer.z-servingSide*0.5;ball.y=1;
+    }
+  }
+  btnEdges.bump=btnEdges.set=btnEdges.atk=false;   // edges are one frame only
+  updatePuffs(Math.max(dt,0));
+  sync();
+  renderer.render(scene,cam);
+}
+
+resize();
+setupServe();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
