@@ -45,7 +45,7 @@ Supportato il gamepad tipo PlayStation (Gamepad API), con configurazione dei tas
 ## Struttura
 
 ```
-sensible-beach-volley.html   pagina + logica di gioco (regole, AI, input, HUD, audio)
+sensible-beach-volley.html   pagina + colpi, AI, input, HUD, audio
 js/
   logic/                     simulazione pura: niente Three.js, niente DOM
     constants.js             misure del campo, zona libera, squadre, regole per tipo di campo
@@ -54,6 +54,8 @@ js/
     ball.js                  fisica della palla: lancio, caduta, spin, float, nastro/rete
                              (restituisce eventi, non segna punti)
     players.js               stato e fisica dei giocatori: corsa, salto, tuffo, recupero
+    match.js                 regole della partita: fasi, punteggio, ordine di servizio,
+                             tempo di servizio (8 s), tocchi e falli, chi vince lo scambio
   view/                      tutto ciò che si disegna (Three.js)
     textures.js              helper per texture pixel art e piani
     venueView.js             disegna l'impianto, inquadra la camera, posiziona gli arbitri
@@ -73,7 +75,7 @@ js/
 
 ## Prossimi passi
 
-- Separare dall'HTML AI, input e regole della partita in moduli dedicati.
+- Separare dall'HTML colpi (bagher, alzata, schiacciata), AI e input in moduli dedicati.
 - Punteggio regolamentare: set a 21 (terzo a 15), 2 punti di scarto, cambi campo.
 - Modalità 2 giocatori in locale e livelli di difficoltà dell'AI.
 - Aggiornare Three.js (oggi r128, caricato come variabile globale).

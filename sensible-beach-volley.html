@@ -88,13 +88,18 @@ PRESS SPACE TO SERVE</div>
 // ---------- logic: pure simulation, no Three.js / DOM ----------
 import { SIDE_USA, SIDE_SWE } from './js/logic/constants.js';
 import {
-  inCourt, isOnCourtSide, courtSideAtZ, pickTargetLocal, targetToWorld,
+  isOnCourtSide, courtSideAtZ, pickTargetLocal, targetToWorld,
 } from './js/logic/court.js';
 import { createVenue } from './js/logic/venue.js';
 import {
-  createBall, resetBall, launchBall, makeFloat, stepBall, recordTrail,
+  createBall, launchBall, makeFloat, stepBall, recordTrail,
   landingPoint as ballLandingPoint,
 } from './js/logic/ball.js';
+import {
+  createMatch, resetScore, setupServe as setupServeRules, holdBallForServe,
+  canServe, aiReadyToServe, startRally, recordTouch, awardPoint, judgeLanding,
+  tickPoint, tickServe, SERVE_LIMIT,
+} from './js/logic/match.js';
 import {
   createPlayers, isBusy, stepJumps,
   startJump as jumpPlayer, startDive as divePlayer, movePlayer as movePlayerBody,
@@ -115,7 +120,7 @@ import { REF_AUTH_TIME } from './js/view/npcView.js';
 // ============================================================
 
 // ---------- constants ----------
-const WIN_SCORE = 15;
+
 
 
 // ---------- renderer / scene ----------
@@ -217,32 +222,18 @@ function beep(f,d=0.07,type='square',v=0.08){
 
 // ---------- game state ----------
 const ball=createBall(SIDE_USA);
-let score={usa:0,swe:0};
-let state='serve';
-let servingSide=SIDE_USA;
+const match=createMatch();   // phases, score, service order: js/logic/match.js
 const banner=document.getElementById('banner');
 const scoreDiv=document.getElementById('score');
 const touchDiv=document.getElementById('touches');
-let pointTimer=0;
 let hitstop=0;   // global freeze frames on hard contacts
 
-// --- serve authorization: referee window + 8 second rule ---
+// --- serve authorization HUD: referee window + 8 second rule ---
 const serveBox=document.getElementById('servebox');
 const serveTimeEl=document.getElementById('serveTime');
 const serveBarEl=document.getElementById('serveBar');
 const refIconCv=document.getElementById('refIcon');
-const SERVE_LIMIT=8;
-const SERVE_PREP=3;        // seconds before the referee whistles
-let serveTimer=SERVE_LIMIT;
-let servePhase='prep';     // 'prep' (getting ready) -> 'go' (whistle blown)
-let prepTimer=SERVE_PREP;
-let aiServeAt=2;           // AI waits >=2s after the whistle
 let refBlink=0;
-// beach service order: the same player keeps serving while their team
-// scores; on a side-out the OTHER team serves and alternates its server
-let curServer=null;
-const serveRot={usa:0,swe:0};
-let lastServeSide=null;
 function drawRefIcon(blow){
   // stylized first referee in profile, whistle to the mouth
   const g=refIconCv.getContext('2d');
@@ -279,7 +270,7 @@ addEventListener('keydown',e=>{
     if(ids[idx])switchCourt(ids[idx]);
     return;
   }
-  if(state==='over'&&e.code==='Enter'){score={usa:0,swe:0};servingSide=SIDE_USA;setupServe();}
+  if(match.state==='over'&&e.code==='Enter')newMatch();
 });
 addEventListener('keyup',e=>keys[e.code]=false);
 
@@ -439,10 +430,10 @@ function pollPad(){
 }
 
 function setHUD(){
-  scoreDiv.innerHTML=`<span class="usa">USA ${score.usa}</span> — <span class="swe">${score.swe} SWE</span>`;
+  scoreDiv.innerHTML=`<span class="usa">USA ${match.score.usa}</span> — <span class="swe">${match.score.swe} SWE</span>`;
 }
 function setTouchHUD(){
-  if(state!=='rally'||!ball.live){touchDiv.textContent='';return;}
+  if(match.state!=='rally'||!ball.live){touchDiv.textContent='';return;}
   const who=ball.lastSide===SIDE_USA?'USA':'SWE';
   const n=Math.min(ball.touches,3);
   touchDiv.textContent=who+' '+'●'.repeat(n)+'○'.repeat(3-n);
@@ -455,43 +446,17 @@ function rnd(a){return (Math.random()*2-1)*a;}
 function faceAngle(p,tx,tz){return Math.atan2(-(tx-p.x),-(tz-p.z));}
 
 function setupServe(){
-  state='serve';
-  resetBall(ball);ball.touches=0;ball.chainQ=0.7;
-  ball.lastToucher=null;hitstop=0;
-  const homes=court().getPlayerHomesWorld();
-  players.forEach((p,i)=>{
-    p.x=homes[i][0];p.z=homes[i][1];p.home={x:homes[i][0],z:homes[i][1]};
-    p.air=false;p.jumpH=0;p.jumpV=0;p.cool=0;
-    p.vx=0;p.vz=0;p.windup=0;p.diveT=0;p.downT=0;
-    p.poseKind='idle';p.poseT=0;p.ready=false;
-  });
-  // fresh match: reset the service order
-  if(score.usa===0&&score.swe===0){lastServeSide=null;serveRot.usa=0;serveRot.swe=0;}
-  // side-out: the team gaining serve alternates its server
-  if(lastServeSide!==null&&servingSide!==lastServeSide){
-    if(servingSide===SIDE_USA)serveRot.usa^=1; else serveRot.swe^=1;
-  }
-  lastServeSide=servingSide;
-  const teamIdx = servingSide===SIDE_USA?[0,1]:[2,3];
-  const rot = servingSide===SIDE_USA?serveRot.usa:serveRot.swe;
-  curServer = players[teamIdx[rot]];
-  const partner = players[teamIdx[1-rot]];
-  curServer.x=wx(1.5);curServer.z=wz(servingSide,court().half+0.8);   // behind the end line
-  partner.x=wx(-1.0);partner.z=wz(servingSide,1.6);             // partner up at the net
-  ball.x=curServer.x;ball.z=curServer.z-servingSide*0.5;ball.y=1;
-  ball.vx=ball.vy=ball.vz=0;
-  ball.lastSide=servingSide;
+  hitstop=0;
+  setupServeRules(match, players, ball, court());
   setHUD();setTouchHUD();
-  if(score.usa>=WIN_SCORE||score.swe>=WIN_SCORE){
-    state='over';
-    showBanner((score.usa>WIN_SCORE-1?'USA WINS THE MATCH!':'SWEDEN WINS THE MATCH!')+'\nPRESS ENTER TO REPLAY');
+  if(match.state==='over'){
+    showBanner((match.winner===SIDE_USA?'USA WINS THE MATCH!':'SWEDEN WINS THE MATCH!')+'\nPRESS ENTER TO REPLAY');
   }else{
-    servePhase='prep';prepTimer=SERVE_PREP;   // players get set first...
-    serveTimer=SERVE_LIMIT;refBlink=0;
-    aiServeAt=2+Math.random()*1.5;            // ...AI waits 2s+ after the whistle
-    showBanner(servingSide===SIDE_USA?'USA TO SERVE\nPRESS SPACE':'SWEDEN SERVING…');
+    refBlink=0;
+    showBanner(match.servingSide===SIDE_USA?'USA TO SERVE\nPRESS SPACE':'SWEDEN SERVING…');
   }
 }
+function newMatch(){ resetScore(match); setupServe(); }
 
 // ---------- ball launch ----------
 function hitBall(px,pz,tx,tz,vyUp,hard,power=1,inherit=0){
@@ -502,27 +467,15 @@ function hitBall(px,pz,tx,tz,vyUp,hard,power=1,inherit=0){
 
 // ---------- rules ----------
 function registerTouch(p){
-  if(ball.lastSide!==p.side){ ball.touches=0; ball.lastToucher=null; }
-  if(ball.lastToucher===p){
-    pointTo(-p.side,'DOUBLE TOUCH!');
-    return false;
-  }
-  ball.touches++;
-  if(ball.touches>3){
-    pointTo(-p.side,'FOUR TOUCHES!');
-    return false;
-  }
-  ball.lastToucher=p;
-  ball.lastSide=p.side;
+  const fault=recordTouch(ball,p);
+  if(fault){ pointTo(-p.side,fault); return false; }
   setTouchHUD();
   return true;
 }
 
 function pointTo(side,msg){
-  state='point';pointTimer=1.6;
+  awardPoint(match,side);
   serveBox.style.display='none';
-  if(side===SIDE_USA)score.usa++;else score.swe++;
-  servingSide=side;
   setHUD();touchDiv.textContent='';
   showBanner((side===SIDE_USA?'POINT USA!':'POINT SWEDEN!')+'\n'+msg);
   beep(2300,0.09,'square',0.06);setTimeout(()=>beep(2300,0.14,'square',0.06),120); // whistle
@@ -696,15 +649,15 @@ function updateHuman(dt,p){
 
   const anyBtn=btnEdges.bump||btnEdges.set||btnEdges.atk;
   if(keys['Space']||anyBtn){
-    if(state==='serve'&&servingSide===SIDE_USA&&servePhase==='go'){
+    if(canServe(match,SIDE_USA)){
       keys['Space']=false;btnEdges.bump=btnEdges.set=btnEdges.atk=false;
       let tx=ball.x+mx*2.2, tz=wz(-SIDE_USA, 3.5+Math.random()*3);
       ball.y=2.0;   // struck at full extension: clears the tape with margin
       hitBall(ball.x,ball.z,tx,tz,8.0,false);
       makeFloat(ball);
-      ball.lastSide=SIDE_USA;ball.touches=1;ball.lastToucher=p;ball.chainQ=0.75;
-      state='rally';hideBanner();ball.aftertouch=0.6;setTouchHUD();
-    }else if(state==='rally'&&p.cool<=0&&!busy(p)){
+      startRally(match,ball,p);
+      hideBanner();ball.aftertouch=0.6;setTouchHUD();
+    }else if(match.state==='rally'&&p.cool<=0&&!busy(p)){
       const dist=Math.hypot(ball.x-p.x,ball.z-p.z);
       const onOurSide=isOnCourtSide(ball.z, p.side, court());
       const canGround=ball.live&&onOurSide&&dist<HIT_RADIUS&&ball.y<REACH_GROUND&&ball.lastToucher!==p;
@@ -778,7 +731,7 @@ function updateAI(dt,human){
     if(p===human)return;
     p.cool=Math.max(0,p.cool-dt);
     let tx=p.home.x,tz=p.home.z;
-    if(state==='serve'){ tx=p.x; tz=p.z; }   // hold serve formation (server stays behind the line)
+    if(match.state==='serve'){ tx=p.x; tz=p.z; }   // hold serve formation (server stays behind the line)
     const ballComing = ball.live && courtSideAtZ(lp.z, court()) === p.side;
     let myTeam=players.filter(q=>q.side===p.side);
     if(ball.lastToucher&&ball.lastToucher.side===p.side){
@@ -825,8 +778,7 @@ function updateAI(dt,human){
     }
 
     // AI serve: only after the whistle, and never sooner than 2s after it
-    if(state==='serve'&&servingSide===SIDE_SWE&&p===curServer&&servePhase==='go'
-       &&(SERVE_LIMIT-serveTimer)>=aiServeAt){
+    if(canServe(match,SIDE_SWE)&&p===match.server&&aiReadyToServe(match)){
       const t=pickOpenTarget(SIDE_SWE);
       const jumpSrv=Math.random()<0.25;
       if(jumpSrv){
@@ -840,8 +792,8 @@ function updateAI(dt,human){
         hitBall(ball.x,ball.z,t.x+rnd(0.6),dz2+rnd(0.6),8.0,false);
         makeFloat(ball);
       }
-      ball.lastSide=SIDE_SWE;ball.touches=1;ball.lastToucher=p;ball.chainQ=0.75;
-      state='rally';hideBanner();setTouchHUD();
+      startRally(match,ball,p);
+      hideBanner();setTouchHUD();
     }
   });
 }
@@ -982,14 +934,9 @@ function updateBall(dt){
   if(ev.landed){
     sandPuff(ball.x,ball.z,6,1.0);
     beep(90,0.1,'sawtooth',0.12);
-    if(state!=='rally'&&state!=='serve')return;
-    const inside=inCourt(ball.x,ball.z,court());
-    if(!inside){
-      pointTo(-ball.lastSide,'BALL OUT!');
-    }else{
-      const sideLanded=courtSideAtZ(ball.z, court())||SIDE_USA;
-      pointTo(-sideLanded,'SAND POINT!');
-    }
+    if(match.state!=='rally'&&match.state!=='serve')return;
+    const r=judgeLanding(ball,court());
+    pointTo(r.side,r.msg);
   }
 }
 
@@ -1003,9 +950,9 @@ function sync(){
   marker.position.set(h.x,0.13,h.z-1.0);
 
   venueView.officials.update({
-    signal: state==='point',
-    authT: state==='serve'?authT:0,
-    servingSide,
+    signal: match.state==='point',
+    authT: match.state==='serve'?authT:0,
+    servingSide: match.servingSide,
     ballZ: ball.z,
   });
 
@@ -1023,9 +970,9 @@ function loop(now){
     btnEdges.bump=btnEdges.bump||padInput.bumpPressed;
     btnEdges.set =btnEdges.set ||padInput.setPressed;
     btnEdges.atk =btnEdges.atk ||padInput.atkPressed;
-    if(state==='over'&&(btnEdges.bump||btnEdges.set||btnEdges.atk)){
+    if(match.state==='over'&&(btnEdges.bump||btnEdges.set||btnEdges.atk)){
       btnEdges.bump=btnEdges.set=btnEdges.atk=false;
-      score={usa:0,swe:0};servingSide=SIDE_USA;setupServe();
+      newMatch();
     }
   }
 
@@ -1035,36 +982,32 @@ function loop(now){
   if(ball.squashT>0)ball.squashT-=Math.max(dt,0.0001);
   if(authT>0)authT-=Math.max(dt,0.0001);
 
-  if(state==='point'){
-    pointTimer-=dt;
-    if(pointTimer<=0)setupServe();
+  if(match.state==='point'){
+    if(tickPoint(match,dt))setupServe();
   }
 
-  if(state==='serve'||state==='rally'){
+  if(match.state==='serve'||match.state==='rally'){
     // referee window + 8 second service rule (after a 3s prep phase)
-    if(state==='serve'){
-      if(servePhase==='prep'){
+    if(match.state==='serve'){
+      const sv=tickServe(match,dt);
+      if(sv.whistle){
+        authT=REF_AUTH_TIME;              // arm sweeps from server to net
+        beep(2300,0.12,'square',0.07);   // referee whistles: service authorized
+      }
+      if(match.servePhase==='prep'||sv.whistle){
         serveBox.style.display='none';
-        prepTimer-=dt;
-        if(prepTimer<=0){
-          servePhase='go';
-          serveTimer=SERVE_LIMIT;
-          authT=REF_AUTH_TIME;              // arm sweeps from server to net
-          beep(2300,0.12,'square',0.07);   // referee whistles: service authorized
-        }
       }else{
         serveBox.style.display='block';
-        serveTimer-=dt;
         refBlink+=dt;
         if(refBlink>0.5)refBlink=0;
         drawRefIcon(refBlink<0.3);
-        const tLeft=Math.max(0,serveTimer);
+        const tLeft=Math.max(0,match.serveTimer);
         serveTimeEl.textContent=Math.ceil(tLeft);
         serveBarEl.style.width=(tLeft/SERVE_LIMIT*100)+'%';
         serveBarEl.style.background=tLeft<3?'#ff5a5a':'#7bff6e';
-        if(serveTimer<=0){
+        if(sv.timeout){
           serveBox.style.display='none';
-          pointTo(-servingSide,'8 SECONDS!');   // delay of service
+          pointTo(-match.servingSide,'8 SECONDS!');   // delay of service
         }
       }
     }else{
@@ -1079,8 +1022,8 @@ function loop(now){
     updateBall(dt);
     updateReady();
     if(ball.live)recordTrail(ball);
-    if(state==='serve'&&curServer){
-      ball.x=curServer.x;ball.z=curServer.z-servingSide*0.5;ball.y=1;
+    if(match.state==='serve'&&match.server){
+      holdBallForServe(match,ball);
     }
   }
   btnEdges.bump=btnEdges.set=btnEdges.atk=false;   // edges are one frame only
