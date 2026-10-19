@@ -47,24 +47,29 @@ Supportato il gamepad tipo PlayStation (Gamepad API), con configurazione dei tas
 ```
 sensible-beach-volley.html   pagina + logica di gioco (regole, AI, input, HUD, audio)
 js/
-  ball/
-    ball.js                  stato e fisica della palla: lancio, punto di caduta, spin,
-                             float, nastro/rete, atterraggio (restituisce eventi, non segna punti)
-    ballView.js              sprite, ombra, anello di caduta, scia
-  court/                     campi e impianto
-    courtController.js       punto d'accesso: campo attivo, coordinate, camera, cambio campo
-    createMainCourt.js       campo centrale (assembla gli elementi)
-    createSideCourt.js       campi laterali
-    courtGameplay.js         regole geometriche: dentro/fuori, lato, passaggio della rete
-    constants.js, presets.js misure e preset per tipo di campo
-    elements/                un file per elemento: lines, net, netPosts, refTower,
+  logic/                     simulazione pura: niente Three.js, niente DOM
+    constants.js             misure del campo, zona libera, squadre, regole per tipo di campo
+    court.js                 campo come dati + geometria: dentro/fuori, lato, passaggio rete
+    venue.js                 impianto (centrale + 2 laterali), campo attivo, coordinate
+    ball.js                  fisica della palla: lancio, caduta, spin, float, nastro/rete
+                             (restituisce eventi, non segna punti)
+    players.js               stato e fisica dei giocatori: corsa, salto, tuffo, recupero
+  view/                      tutto ciò che si disegna (Three.js)
+    textures.js              helper per texture pixel art e piani
+    venueView.js             disegna l'impianto, inquadra la camera, posiziona gli arbitri
+    court/
+      mainCourtView.js       campo centrale (assembla gli elementi)
+      sideCourtView.js       campi laterali
+      presets.js             colori, altezze di disegno, ripetizione delle texture
+      courtTextures.js       sabbia + pre-caricamento texture
+      elements/              un file per elemento: lines, net, netPosts, refTower,
                              stands, banners, protectionNet
-  players/players.js         sprite e pose dei giocatori, squadre, creazione
-  npc/npc.js                 arbitri e folla
-  render/textures.js         helper per texture pixel art e piani
+    playersView.js           maglie, pose e animazioni dei giocatori
+    ballView.js              sprite, ombra, anello di caduta, scia
+    npcView.js               arbitri e folla
 ```
 
-Ogni elemento possiede la propria texture e una funzione `createX(scene, opts)`. Il gioco accede ai campi solo tramite `createCourtController`.
+**Regola:** `logic/` non importa mai da `view/`. La grafica legge lo stato della logica e lo disegna (`createXView(scene, stato)` + `sync()`), quindi la logica si può far girare e testare senza browser.
 
 ## Prossimi passi
 

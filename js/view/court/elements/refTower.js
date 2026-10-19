@@ -1,4 +1,4 @@
-import { makeTex, flatPlane, getShadowTex } from '../../render/textures.js';
+import { makeTex, flatPlane, getShadowTex } from '../../textures.js';
 
 let towerTex = null;
 

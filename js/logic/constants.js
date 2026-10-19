@@ -1,5 +1,9 @@
-/** Court dimensions and net height (world units). */
+// ============================================================
+// LOGIC CONSTANTS — measures and rules of the game world.
+// Pure data: no Three.js, no DOM. Visual tuning lives in js/view/.
+// ============================================================
 
+/** Court dimensions and net height (world units). */
 export const COURT_W = 8;
 export const COURT_L = 16;
 export const HALF = COURT_L / 2;
@@ -21,10 +25,32 @@ export const SIDE_NET_BUFFER = 1.2;
 /** Extra sand added to a side court footprint: free zone + net + buffer, both sides. */
 export const SIDE_SCENE_PAD = 2 * (FREE_ZONE + SIDE_NET_BUFFER);
 
+/** Team sides: USA plays the near half (+Z), Sweden the far half (−Z). */
+export const SIDE_USA = 1, SIDE_SWE = -1;
+
 /** Court role within a multi-court venue. */
 export const COURT_TYPE = {
   MAIN: 'main',
   SIDE: 'side',
+};
+
+/**
+ * Rules and footprint per court type.
+ * footprintW/L: full scene footprint (sand + infrastructure), used for layout.
+ */
+export const COURT_RULES = {
+  [COURT_TYPE.MAIN]: {
+    playable: true,
+    hasOfficials: true,
+    footprintW: 32,
+    footprintL: 38,
+  },
+  [COURT_TYPE.SIDE]: {
+    playable: true,
+    hasOfficials: false,
+    footprintW: COURT_W + SIDE_SCENE_PAD,
+    footprintL: COURT_L + SIDE_SCENE_PAD,
+  },
 };
 
 /** Default placement of secondary courts around the main court. */
@@ -41,19 +67,12 @@ export const PLAYER_HOMES_LOCAL = [
   [2.0, -5.2],
 ];
 
-/** Half-width of a court's scene footprint (for venue layout). */
-export function sceneHalfW(court) {
-  if (court.venueW) return court.venueW / 2;
-  const pad = court.sandPadExtraW ?? 4;
-  return (COURT_W + pad) / 2;
-}
-
 /** World X center for a side court given the main court and flank (-1 | 1). */
 export function sideCourtCenterX(flank, mainCourt) {
   return flank * (
-    sceneHalfW(mainCourt) +
+    mainCourt.footprintW / 2 +
     VENUE_LAYOUT.sideCourtGap +
-    sceneHalfW({ sandPadExtraW: SIDE_SCENE_PAD })
+    COURT_RULES[COURT_TYPE.SIDE].footprintW / 2
   );
 }
 

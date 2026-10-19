@@ -1,5 +1,5 @@
-import { COURT_W } from '../constants.js';
-import { makeTex, flatPlane } from '../../render/textures.js';
+import { COURT_W } from '../../../logic/constants.js';
+import { makeTex, flatPlane } from '../../textures.js';
 
 /** Distance of each post outside the sideline. */
 export const POST_OFFSET = 0.35;

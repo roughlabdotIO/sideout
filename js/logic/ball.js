@@ -1,4 +1,4 @@
-import { netCrossEvent } from '../court/courtGameplay.js';
+import { netCrossEvent } from './court.js';
 
 // ============================================================
 // BALL — state and flight physics. Knows nothing about score,

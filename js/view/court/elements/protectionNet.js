@@ -1,5 +1,5 @@
-import { protectionNetHalfExtents } from '../constants.js';
-import { makeTex, flatPlane } from '../../render/textures.js';
+import { protectionNetHalfExtents } from '../../../logic/constants.js';
+import { makeTex, flatPlane } from '../../textures.js';
 
 let protNetTex = null;
 let protPostTex = null;

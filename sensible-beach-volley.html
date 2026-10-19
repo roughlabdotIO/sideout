@@ -85,19 +85,27 @@ PRESS SPACE TO SERVE</div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script type="module">
+// ---------- logic: pure simulation, no Three.js / DOM ----------
+import { SIDE_USA, SIDE_SWE } from './js/logic/constants.js';
 import {
-  createCourtController,
-  inCourt, clampPlayerOnCourt, isOnCourtSide, courtSideAtZ,
-  pickTargetLocal, targetToWorld,
-} from './js/court/index.js';
-import { makeTex, flatPlane } from './js/render/textures.js';
-import { SIDE_USA, SIDE_SWE, createPlayers, syncPlayerSprite } from './js/players/players.js';
-import { REF_AUTH_TIME } from './js/npc/npc.js';
+  inCourt, isOnCourtSide, courtSideAtZ, pickTargetLocal, targetToWorld,
+} from './js/logic/court.js';
+import { createVenue } from './js/logic/venue.js';
 import {
   createBall, resetBall, launchBall, makeFloat, stepBall, recordTrail,
   landingPoint as ballLandingPoint,
-} from './js/ball/ball.js';
-import { createBallView } from './js/ball/ballView.js';
+} from './js/logic/ball.js';
+import {
+  createPlayers, isBusy, stepJumps,
+  startJump as jumpPlayer, startDive as divePlayer, movePlayer as movePlayerBody,
+  PLAYER_SPEED, HIT_RADIUS, REACH_GROUND, WINDUP, DOWN_TIME,
+} from './js/logic/players.js';
+// ---------- view: what gets drawn ----------
+import { makeTex, flatPlane } from './js/view/textures.js';
+import { createVenueView } from './js/view/venueView.js';
+import { createPlayersView } from './js/view/playersView.js';
+import { createBallView } from './js/view/ballView.js';
+import { REF_AUTH_TIME } from './js/view/npcView.js';
 
 // ============================================================
 // SENSIBLE BEACH VOLLEY — retro top-down 2v2 arcade volleyball
@@ -107,19 +115,7 @@ import { createBallView } from './js/ball/ballView.js';
 // ============================================================
 
 // ---------- constants ----------
-const G_J = 26;
-const JUMP_V = 8;
-const PLAYER_SPEED = 7.5;
-const HIT_RADIUS = 1.15;
-const REACH_GROUND = 2.5;
 const WIN_SCORE = 15;
-
-const RESP_GROUND = 9;
-const RESP_AIR = 2.5;
-const WINDUP = 0.06;
-const DIVE_SPEED = 12;
-const DIVE_TIME = 0.42;
-const DOWN_TIME = 0.55;
 
 
 // ---------- renderer / scene ----------
@@ -146,13 +142,15 @@ function resize(){
 }
 addEventListener('resize',resize);
 
-// ---------- courts (venue, active court, camera framing, referees) ----------
-const courts = createCourtController(scene, cam);
-function court(){ return courts.active; }
-const { wx, wz, lz, txFrom } = courts;
+// ---------- courts: logic (venue) + drawing (venueView: courts, camera, referees) ----------
+const venue = createVenue();
+const venueView = createVenueView(scene, cam, venue);
+function court(){ return venue.active; }
+const { wx, wz, lz, txFrom } = venue;
 
 function switchCourt(id){
-  if(!courts.switchTo(id))return;
+  if(!venue.setActive(id))return;
+  venueView.refresh();
   setupServe();
   showToast('COURT · '+court().id.toUpperCase().replace('-',' '));
   beep(620,0.06,'square',0.07);
@@ -162,11 +160,12 @@ const markerTex = makeTex(10,6,(g)=>{
   g.fillStyle='#ffffff';
   g.fillRect(0,0,10,2);g.fillRect(3,2,4,2);g.fillRect(4,4,2,2);
 });
-const players=createPlayers(scene);
+const players=createPlayers();
+const playersView=createPlayersView(scene, players);
 
 const ballView=createBallView(scene);
 const marker=flatPlane(0.6,0.4,markerTex);marker.position.y=0.13;scene.add(marker);
-// referees live in js/npc/npc.js; this drives the arm sweep
+// referees are drawn by js/view/npcView.js; this drives the arm sweep
 let authT=0;   // service-authorization sweep timer
 
 // --- sand particles ---
@@ -536,17 +535,11 @@ function landingPoint(){ return ballLandingPoint(ball); }
 // ============================================================
 
 function startJump(p){
-  if(p.air)return;
-  p.air=true;p.jumpV=JUMP_V;
-  beep(500,0.04,'triangle',0.05);
+  if(jumpPlayer(p))beep(500,0.04,'triangle',0.05);
 }
 
 function startDive(p){
-  const lp=landingPoint();
-  let dx=lp.x-p.x, dz=lp.z-p.z;
-  const d=Math.hypot(dx,dz)||1;
-  p.vx=dx/d*DIVE_SPEED; p.vz=dz/d*DIVE_SPEED;
-  p.diveT=DIVE_TIME; p.diveDx=dx;
+  divePlayer(p, landingPoint());
   sandPuff(p.x,p.z,5,1.0);
   beep(300,0.05,'triangle',0.06);
 }
@@ -671,20 +664,8 @@ function trySpike(p,mx,mz){
 }
 
 // ---------- shared movement ----------
-function movePlayer(p,tvx,tvz,dt){
-  if(p.diveT>0){
-    const a=Math.min(1,2.0*dt); p.vx-=p.vx*a; p.vz-=p.vz*a;
-  }else if(p.downT>0){
-    const a=Math.min(1,6*dt); p.vx-=p.vx*a; p.vz-=p.vz*a;
-  }else{
-    const a=Math.min(1,(p.air?RESP_AIR:RESP_GROUND)*dt);
-    p.vx+=(tvx-p.vx)*a; p.vz+=(tvz-p.vz)*a;
-  }
-  p.x+=p.vx*dt; p.z+=p.vz*dt;
-  p.stride=(p.stride||0)+Math.hypot(p.vx,p.vz)*dt;   // drives the leg cycle
-  clampPlayer(p);
-}
-function busy(p){return p.diveT>0||p.downT>0||p.windup>0;}
+function movePlayer(p,tvx,tvz,dt){ movePlayerBody(p,tvx,tvz,dt,court()); }
+const busy=isBusy;
 
 // ---------- human control ----------
 function humanPlayer(){
@@ -777,7 +758,6 @@ function updateHuman(dt,p){
   }
 }
 
-function clampPlayer(p){ clampPlayerOnCourt(p, court()); }
 
 // ---------- AI ----------
 function pickOpenTarget(side){
@@ -987,17 +967,7 @@ function updateReady(){
 
 // ---------- jump physics ----------
 function updateJumps(dt){
-  players.forEach(p=>{
-    if(p.air){
-      p.jumpV-=G_J*dt;
-      p.jumpH+=p.jumpV*dt;
-      if(p.jumpH<=0){
-        p.jumpH=0;p.jumpV=0;p.air=false;
-        p.cool=Math.max(p.cool,0.15);
-        sandPuff(p.x,p.z,4,0.8);
-      }
-    }
-  });
+  stepJumps(players,dt).forEach(p=>sandPuff(p.x,p.z,4,0.8));   // touch-down puff
 }
 
 // ---------- ball physics ----------
@@ -1025,14 +995,14 @@ function updateBall(dt){
 
 // ---------- render sync ----------
 function sync(){
-  players.forEach(syncPlayerSprite);
+  playersView.sync();
 
   ballView.sync(ball);
 
   const h=humanPlayer();
   marker.position.set(h.x,0.13,h.z-1.0);
 
-  courts.officials.update({
+  venueView.officials.update({
     signal: state==='point',
     authT: state==='serve'?authT:0,
     servingSide,

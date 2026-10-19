@@ -1,6 +1,6 @@
-import { COURT_W, COURT_L } from '../constants.js';
+import { COURT_W, COURT_L } from '../../../logic/constants.js';
 import { getCourtPreset } from '../presets.js';
-import { makeTex, flatPlane } from '../../render/textures.js';
+import { makeTex, flatPlane } from '../../textures.js';
 
 const linesTexByType = {};
 

@@ -1,7 +1,4 @@
-import { makeTex, flatPlane, getShadowTex } from '../render/textures.js';
-
-/** Team sides: USA plays the near half (+Z), Sweden the far half (−Z). */
-export const SIDE_USA = 1, SIDE_SWE = -1;
+import { makeTex, flatPlane, getShadowTex } from './textures.js';
 
 // ============================================================
 // PLAYER POSE SPRITES — original big-head pixel style.
@@ -181,70 +178,69 @@ function playerTexSet(kit, accent, shorts, skin, hair, back){
 // national kits: USA white/red trim/blue shorts, SWE yellow/blue.
 // USA play the near court facing the net, so we see their backs (no eyes);
 // Sweden face the camera. Profiles are shared, one eye on the leading side.
-const ROSTER = [
-  { name:'USA-1', side:SIDE_USA, x:-2.0, z: 5.2, kit:['#f2f2f8','#e03d3d','#2440b0','#c98850','#3a2a1a',true] },
-  { name:'USA-2', side:SIDE_USA, x: 2.0, z: 5.2, kit:['#f2f2f8','#e03d3d','#2440b0','#8a5a33','#181818',true] },
-  { name:'SWE-1', side:SIDE_SWE, x:-2.0, z:-5.2, kit:['#ffd21f','#2f6fd6','#2f6fd6','#e8b98a','#e8d24d',false] },
-  { name:'SWE-2', side:SIDE_SWE, x: 2.0, z:-5.2, kit:['#ffd21f','#2f6fd6','#2f6fd6','#e8b98a','#b06a2a',false] },
-];
+// [kit, accent, shorts, skin, hair, back]
+const KITS = {
+  'USA-1': ['#f2f2f8','#e03d3d','#2440b0','#c98850','#3a2a1a',true],
+  'USA-2': ['#f2f2f8','#e03d3d','#2440b0','#8a5a33','#181818',true],
+  'SWE-1': ['#ffd21f','#2f6fd6','#2f6fd6','#e8b98a','#e8d24d',false],
+  'SWE-2': ['#ffd21f','#2f6fd6','#2f6fd6','#e8b98a','#b06a2a',false],
+};
 
-function makePlayer(scene, texs, x, z, side, name){
-  const spr=flatPlane(1.0,1.35,texs.idle);
-  spr.position.set(x,0.1,z);scene.add(spr);
-  const sh=flatPlane(1.0,0.5,getShadowTex());
-  sh.position.set(x,0.04,z+0.35);scene.add(sh);
-  return {mesh:spr,shadow:sh,texs,x,z,side,name,home:{x,z},cool:0,
-          vx:0,vz:0,
-          air:false,jumpH:0,jumpV:0,
-          windup:0,wmx:0,wmz:0,wKind:null,wMode:'auto',
-          diveT:0,downT:0,diveDx:0,
-          poseKind:'idle',poseT:0,ready:false,faceA:0};
-}
-
-/**
- * Builds the four players [USA-1, USA-2, SWE-1, SWE-2] and adds their
- * sprites + shadows to the scene.
- * @param {THREE.Scene} scene
- */
-export function createPlayers(scene){
-  return ROSTER.map(r=>makePlayer(scene, playerTexSet(...r.kit), r.x, r.z, r.side, r.name));
-}
-
-/** Pushes a player's simulation state onto its sprite and shadow. */
-export function syncPlayerSprite(p){
-  // pose & animation selection — head-up front view; lateral runs
-  // switch to the side profile (mirrored when heading left);
-  // backward movement runs on the front frames for now
-  let map=p.texs.idle, wide=1, rot=0, flip=1;
+// pose & animation selection — head-up front view; lateral runs
+// switch to the side profile (mirrored when heading left);
+// backward movement runs on the front frames for now
+function syncSprite(p, v){
+  const texs=v.texs;
+  let map=texs.idle, wide=1, rot=0, flip=1;
   if(p.diveT>0||p.downT>0){
-    map=p.texs.dig; wide=1.25;
+    map=texs.dig; wide=1.25;
     rot=(p.diveDx>=0?-1:1)*Math.PI/2;
   }else if(p.poseT>0){
-    map=p.texs[p.poseKind]||p.texs.idle;
+    map=texs[p.poseKind]||texs.idle;
     if(p.poseKind==='dig')wide=1.25;
   }else if(p.windup>0||p.ready){
-    map=p.texs.ready;
+    map=texs.ready;
   }else if(p.air){
     // spike swing follows the jump: loading up, then cocked at the top
-    map=p.jumpV>1.5?p.texs.spikeWind:p.texs.spikeCock;
+    map=p.jumpV>1.5?texs.spikeWind:texs.spikeCock;
   }else{
     const spd=Math.hypot(p.vx,p.vz);
     if(spd>1.4&&!p.air){
       const frame=Math.floor(p.stride*3)%2;
       if(Math.abs(p.vx)>Math.abs(p.vz)*1.15){
-        map=frame?p.texs.sideB:p.texs.sideA;     // profile run
-        flip=p.vx<0?-1:1;                         // mirror when going left
+        map=frame?texs.sideB:texs.sideA;     // profile run
+        flip=p.vx<0?-1:1;                     // mirror when going left
       }else{
-        map=frame?p.texs.walkB:p.texs.walkA;      // front run (also backward)
+        map=frame?texs.walkB:texs.walkA;      // front run (also backward)
       }
     }
   }
-  if(p.mesh.material.map!==map){p.mesh.material.map=map;}
-  p.mesh.rotation.z=rot;
+  if(v.mesh.material.map!==map){v.mesh.material.map=map;}
+  v.mesh.rotation.z=rot;
   const sc=1+p.jumpH*0.22;
-  p.mesh.scale.set(sc*wide*flip,sc,1);
-  p.mesh.position.set(p.x,0.1,p.z-p.jumpH*0.10);
+  v.mesh.scale.set(sc*wide*flip,sc,1);
+  v.mesh.position.set(p.x,0.1,p.z-p.jumpH*0.10);
   const shs=Math.max(0.5,1-p.jumpH*0.28);
-  p.shadow.scale.set(shs,shs,1);
-  p.shadow.position.set(p.x,0.04,p.z+0.35);
+  v.shadow.scale.set(shs,shs,1);
+  v.shadow.position.set(p.x,0.04,p.z+0.35);
+}
+
+/**
+ * Sprites and shadows for the players, matched by name to their kit.
+ * @param {THREE.Scene} scene
+ * @param {object[]} players states from js/logic/players.js
+ */
+export function createPlayersView(scene, players){
+  const views=players.map(p=>{
+    const texs=playerTexSet(...KITS[p.name]);
+    const mesh=flatPlane(1.0,1.35,texs.idle);
+    mesh.position.set(p.x,0.1,p.z);scene.add(mesh);
+    const shadow=flatPlane(1.0,0.5,getShadowTex());
+    shadow.position.set(p.x,0.04,p.z+0.35);scene.add(shadow);
+    return {mesh,shadow,texs};
+  });
+  return {
+    /** Push every player's simulation state onto its sprite and shadow. */
+    sync(){ players.forEach((p,i)=>syncSprite(p,views[i])); },
+  };
 }

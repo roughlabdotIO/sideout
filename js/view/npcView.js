@@ -1,6 +1,6 @@
-import { COURT_W } from '../court/constants.js';
-import { makeTex, flatPlane, getShadowTex } from '../render/textures.js';
-import { createRefTower } from '../court/elements/refTower.js';
+import { COURT_W } from '../logic/constants.js';
+import { makeTex, flatPlane, getShadowTex } from './textures.js';
+import { createRefTower } from './court/elements/refTower.js';
 
 // ============================================================
 // NPC — everyone on the venue who isn't a player:
@@ -114,7 +114,7 @@ function refAuthTex() {
  * Referees for a court: first referee up on the tower chair at the right,
  * second referee on foot at the opposite post, shuffling along the net.
  * @param {THREE.Scene} scene
- * @param {import('../court/courtModel.js').Court} court
+ * @param {import('../logic/court.js').Court} court
  */
 export function createOfficials(scene, court) {
   const cx = court.centerX, cz = court.centerZ;

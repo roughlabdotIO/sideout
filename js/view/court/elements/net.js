@@ -1,5 +1,5 @@
-import { COURT_W } from '../constants.js';
-import { makeTex, flatPlane } from '../../render/textures.js';
+import { COURT_W } from '../../../logic/constants.js';
+import { makeTex, flatPlane } from '../../textures.js';
 
 /** The net extends this far past each sideline, out to the posts. */
 export const NET_OVERHANG = 0.4;

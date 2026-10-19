@@ -1,5 +1,5 @@
-import { makeTex, flatPlane, getShadowTex } from '../render/textures.js';
-import { landingPoint } from './ball.js';
+import { makeTex, flatPlane, getShadowTex } from './textures.js';
+import { landingPoint } from '../logic/ball.js';
 
 let ballTex = null;
 

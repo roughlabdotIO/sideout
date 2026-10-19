@@ -1,5 +1,5 @@
-import { COURT_L, FREE_ZONE } from '../constants.js';
-import { makeTex, tiledPlane } from '../../render/textures.js';
+import { COURT_L, FREE_ZONE } from '../../../logic/constants.js';
+import { makeTex, tiledPlane } from '../../textures.js';
 import { standsLayout } from './stands.js';
 
 let bannerTex = null;

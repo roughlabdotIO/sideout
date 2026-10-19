@@ -1,6 +1,6 @@
-import { COURT_W, COURT_L, FREE_ZONE } from '../constants.js';
-import { tiledPlane } from '../../render/textures.js';
-import { getCrowdTex } from '../../npc/npc.js';
+import { COURT_W, COURT_L, FREE_ZONE } from '../../../logic/constants.js';
+import { tiledPlane } from '../../textures.js';
+import { getCrowdTex } from '../../npcView.js';
 
 /**
  * Layout of the ring out from the lines: free zone → banner strip → stands.

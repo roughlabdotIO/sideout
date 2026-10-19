@@ -1,4 +1,4 @@
-import { makeTex } from '../render/textures.js';
+import { makeTex } from '../textures.js';
 import { COURT_PRESETS } from './presets.js';
 import { getLinesTex } from './elements/lines.js';
 import { getNetTex } from './elements/net.js';
@@ -6,7 +6,7 @@ import { getPostTex } from './elements/netPosts.js';
 import { getTowerTex } from './elements/refTower.js';
 import { getBannerTex } from './elements/banners.js';
 import { getProtNetTex, getProtPostTex } from './elements/protectionNet.js';
-import { getCrowdTex } from '../npc/npc.js';
+import { getCrowdTex } from '../npcView.js';
 
 let sandTex = null;
 
