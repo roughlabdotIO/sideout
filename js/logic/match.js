@@ -63,7 +63,8 @@ export function setupServe(m, players, ball, court) {
     p.x = homes[i][0]; p.z = homes[i][1]; p.home = { x: homes[i][0], z: homes[i][1] };
     p.air = false; p.jumpH = 0; p.jumpV = 0; p.cool = 0;
     p.vx = 0; p.vz = 0; p.windup = 0; p.diveT = 0; p.downT = 0;
-    p.poseKind = 'idle'; p.poseT = 0; p.ready = false;
+    p.poseKind = 'idle'; p.poseT = 0; p.ready = false; p.aim = null; p.wAim = null;
+    p.approach = null; p.swingQueued = false; p.tapT = 0;
   });
   // fresh match: reset the service order
   if (m.score.usa === 0 && m.score.swe === 0) { m.lastServeSide = null; m.serveRot.usa = 0; m.serveRot.swe = 0; }

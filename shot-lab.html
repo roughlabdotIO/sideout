@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SHOT LAB — Sensible Beach Volley</title>
+<style>
+  html,body{margin:0;padding:0;background:#10102a;overflow:hidden;height:100%;}
+  #game{position:fixed;inset:0;}
+  canvas{image-rendering:pixelated;}
+  .ui{font-family:'Courier New',monospace;font-weight:bold;color:#fff;text-shadow:2px 2px 0 #000;user-select:none;}
+  #panel{
+    position:fixed;top:10px;left:10px;z-index:10;width:330px;max-height:calc(100% - 20px);overflow:auto;
+    background:rgba(0,0,30,.78);border:2px solid #ffe14d;padding:10px 12px;font-size:12px;letter-spacing:1px;
+  }
+  #panel h1{margin:0 0 6px;font-size:18px;color:#ffe14d;letter-spacing:3px;}
+  #panel h2{margin:10px 0 4px;font-size:12px;color:#9fdcff;letter-spacing:2px;}
+  .feed{padding:3px 4px;margin:2px 0;border:1px solid transparent;cursor:pointer;}
+  .feed:hover{border-color:#555a9a;}
+  .feed.on{border-color:#7bff6e;background:rgba(123,255,110,.08);}
+  .feed .k{display:inline-block;width:18px;color:#ffe14d;}
+  .feed .hint{display:block;color:#cfe8ff;font-weight:normal;margin:1px 0 0 18px;font-size:11px;}
+  .row{margin:3px 0;color:#cfe8ff;font-weight:normal;}
+  .row b{color:#fff;}
+  .toggle{color:#7bff6e;}
+  .toggle.off{color:#ff8a8a;}
+  #checks{display:grid;grid-template-columns:1fr 1fr;gap:1px 8px;font-weight:normal;}
+  #checks span{color:#666b9a;}
+  #checks span.done{color:#7bff6e;}
+  #shot{
+    position:fixed;top:18px;left:50%;transform:translateX(-50%);z-index:11;text-align:center;
+    font-size:30px;letter-spacing:3px;color:#ffe14d;text-shadow:3px 3px 0 #000;
+  }
+  #shot small{display:block;font-size:13px;color:#cfe8ff;letter-spacing:2px;margin-top:2px;}
+  #qbar{width:240px;height:8px;border:1px solid #fff;background:#222;margin:6px auto 0;}
+  #qfill{height:100%;width:0;background:#7bff6e;}
+  #result{
+    position:fixed;bottom:14px;left:50%;transform:translateX(-50%);z-index:11;font-size:16px;
+    letter-spacing:2px;color:#fff;background:rgba(0,0,30,.6);padding:4px 12px;
+  }
+</style>
+</head>
+<body>
+<div id="game"></div>
+
+<div id="panel" class="ui">
+  <h1>SHOT LAB</h1>
+  <div class="row">Un giocatore, il lanciatore dall'altra metà campo.</div>
+
+  <h2>LANCI (tasto o click)</h2>
+  <div id="feeds"></div>
+
+  <h2>COMANDI</h2>
+  <div class="row"><b>Frecce/WASD</b> muovi il giocatore</div>
+  <div class="row"><b>Z</b> bagher · <b>X</b> alzata · <b>Spazio</b> decide il gioco:<br>
+    mentre arriva la palla il giocatore <b>si pianta</b>, le frecce muovono il <b>mirino</b>,
+    il colpo parte da solo quando la palla è in portata. Ripremi per annullare.</div>
+  <div class="row"><b>Tieni premuto</b> il tasto mentre miri: più lo tieni, più la palla va <b>alta</b> (barra sopra il giocatore).</div>
+  <div class="row"><b>Doppia pressione</b> (Z, X o Spazio) vicino al cerchio di caduta → <b>tuffo</b></div>
+  <div class="row"><b>C</b> rincorsa in 3 passi (sx · dx-sx + caricamento) e salto: le <b>frecce</b> danno la traiettoria (curvano nei primi due passi; senza frecce va verso la palla) · <b>C</b> in aria schiaccia (premuto durante la rincorsa colpisce da solo)</div>
+  <div class="row"><b>Invio</b> rilancia · <b>R</b> giocatore a casa</div>
+  <div class="row"><b>T</b> lancio automatico: <span id="autoState" class="toggle off">OFF</span></div>
+  <div class="row"><b>I</b> colpisce l'AI: <span id="aiState" class="toggle off">OFF</span></div>
+
+  <h2>COLPI PROVATI</h2>
+  <div id="checks"></div>
+</div>
+
+<div id="shot" class="ui">—<small>scegli un lancio</small><div id="qbar"><div id="qfill"></div></div></div>
+<div id="result" class="ui">premi 1 per lanciare</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script type="module">
+// ---------- logic ----------
+import { SIDE_USA } from './js/logic/constants.js';
+import { inCourt, courtSideAtZ, isOnCourtSide } from './js/logic/court.js';
+import { createVenue } from './js/logic/venue.js';
+import { createBall, launchBall, stepBall, recordTrail, landingPoint } from './js/logic/ball.js';
+import {
+  createPlayers, movePlayer, startJump, stepJumps, isBusy, faceAngle,
+  PLAYER_SPEED, HIT_RADIUS, REACH_GROUND, WINDUP,
+} from './js/logic/players.js';
+import { createShots } from './js/logic/shots.js';
+import { updateHumanControl } from './js/logic/humanControl.js';
+// ---------- view ----------
+import { makeTex, flatPlane } from './js/view/textures.js';
+import { createVenueView } from './js/view/venueView.js';
+import { createPlayersView } from './js/view/playersView.js';
+import { createBallView } from './js/view/ballView.js';
+import { createAimView } from './js/view/aimView.js';
+
+// ============================================================
+// SHOT LAB — one player, a ball feeder on the far side, every
+// shot of js/logic/shots.js reachable on demand (human and AI).
+// ============================================================
+
+const rnd = (a) => (Math.random() * 2 - 1) * a;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+// ---------- renderer / camera (same framing as the game) ----------
+const renderer = new THREE.WebGLRenderer({ antialias: false });
+renderer.setPixelRatio(1);
+document.getElementById('game').appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1b2a5e);
+const VIEW_H = 22;
+const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 200);
+cam.up.set(0, 0, -1);
+function resize() {
+  const w = innerWidth, h = innerHeight, aspect = w / h;
+  renderer.setSize(w, h);
+  cam.top = VIEW_H / 2; cam.bottom = -VIEW_H / 2;
+  cam.left = -VIEW_H / 2 * aspect; cam.right = VIEW_H / 2 * aspect;
+  cam.updateProjectionMatrix();
+}
+addEventListener('resize', resize);
+
+// ---------- world ----------
+const venue = createVenue();
+const venueView = createVenueView(scene, cam, venue);
+const court = () => venue.active;
+const { wx, wz } = venue;
+
+const [player, mate] = createPlayers();       // mate: invisible partner (AI sets aim at it)
+const players = [player, mate];
+const playersView = createPlayersView(scene, [player]);
+const ball = createBall(SIDE_USA);
+const ballView = createBallView(scene);
+const aimView = createAimView(scene);
+
+// feeder: a small ball machine on the far side
+const feederTex = makeTex(10, 10, (g) => {
+  g.fillStyle = '#2a2a3a'; g.fillRect(0, 0, 10, 10);
+  g.fillStyle = '#ff6ec7'; g.fillRect(1, 1, 8, 8);
+  g.fillStyle = '#ffffff'; g.fillRect(3, 6, 4, 4);
+});
+const feederMesh = flatPlane(0.9, 0.9, feederTex);
+feederMesh.position.y = 0.09; scene.add(feederMesh);
+
+// ---------- feedback: sound + sand ----------
+let AC = null;
+function beep(f, d = 0.07, type = 'square', v = 0.08) {
+  try {
+    AC = AC || new (window.AudioContext || window.webkitAudioContext)();
+    const o = AC.createOscillator(), g = AC.createGain();
+    o.type = type; o.frequency.value = f;
+    g.gain.setValueAtTime(v, AC.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, AC.currentTime + d);
+    o.connect(g); g.connect(AC.destination);
+    o.start(); o.stop(AC.currentTime + d);
+  } catch (e) {}
+}
+const puffTex = makeTex(3, 3, (g) => { g.fillStyle = '#f5e3b0'; g.fillRect(0, 0, 3, 3); g.fillStyle = '#dcc07a'; g.fillRect(1, 1, 1, 1); });
+const puffs = [];
+for (let i = 0; i < 28; i++) {
+  const m = flatPlane(0.22, 0.22, puffTex); m.visible = false; m.position.y = 0.06; scene.add(m);
+  puffs.push({ m, life: 0, vx: 0, vz: 0 });
+}
+function sandPuff(x, z, n, pow = 1) {
+  let c = 0;
+  for (const q of puffs) {
+    if (q.life > 0) continue;
+    q.life = 0.22 + Math.random() * 0.16; q.m.visible = true;
+    q.m.position.set(x + rnd(0.25), 0.06, z + rnd(0.25));
+    const a = Math.random() * Math.PI * 2, s = (1.5 + Math.random() * 2.5) * pow;
+    q.vx = Math.cos(a) * s; q.vz = Math.sin(a) * s;
+    if (++c >= n) break;
+  }
+}
+function updatePuffs(dt) {
+  for (const q of puffs) {
+    if (q.life <= 0) continue;
+    q.life -= dt; q.m.position.x += q.vx * dt; q.m.position.z += q.vz * dt;
+    const s = Math.max(0.1, q.life * 4.5); q.m.scale.set(s, s, 1);
+    if (q.life <= 0) q.m.visible = false;
+  }
+}
+
+// ---------- shots wiring ----------
+const SHOT_SOUNDS = {
+  dive: [430, 0.08, 'triangle', 0.09], shank: [260, 0.07, 'sawtooth', 0.08],
+  setDump: [560, 0.05, 'triangle', 0.07], drop: [520, 0.05, 'triangle', 0.07],
+};
+const SHOT_NAMES = {
+  free: 'FREE BALL', recv: 'BAGHER DI RICEZIONE', dig: 'DIFESA (PALLA FORTE)', bumpctrl: 'BAGHER CONTROLLATO',
+  ovdig: 'PALLEGGIO SU PALLA FORTE', bumpset: 'ALZATA IN BAGHER', set: 'ALZATA (PALLEGGIO)', dive: 'TUFFO', spike: 'SCHIACCIATA',
+  'ai-free': 'AI · FREE BALL', 'ai-recv': 'AI · RICEZIONE', 'ai-dig': 'AI · DIFESA', 'ai-shank': 'AI · PALLA SBAGLIATA',
+  'ai-dump': 'AI · PALLONETTO DI SECONDA', 'ai-set': 'AI · ALZATA', 'ai-drop': 'AI · PALLA CORTA', 'ai-spike': 'AI · SCHIACCIATA',
+};
+let hitstop = 0;
+let touches = 0;           // touches this feed (lab rules: never a fault)
+function hitBall(px, pz, tx, tz, vyUp, hard, power = 1, inherit = 0) {
+  launchBall(ball, px, pz, tx, tz, vyUp, hard, power, inherit);
+  if (hard) hitstop = Math.max(hitstop, 0.055);
+  beep(hard ? 200 : 340, 0.06, 'square', hard ? 0.11 : 0.08);
+}
+// lab touch rule: count it, never a fault, and leave lastToucher empty so
+// the same player can chain touches (set to yourself, then spike)
+function labTouch(p) {
+  ball.touches = (ball.lastSide === p.side ? ball.touches : 0) + 1;
+  ball.lastSide = p.side;
+  touches++;
+  return true;
+}
+const shots = createShots({
+  ball, players, venue, touch: labTouch, hit: hitBall,
+  fx: {
+    puff: sandPuff,
+    hitstop: (t) => { hitstop = Math.max(hitstop, t); },
+    sound: (name) => beep(...SHOT_SOUNDS[name]),
+    shot: (name) => showShot(name),
+  },
+});
+
+// ---------- feeds ----------
+// Each feed launches from the feeder (or the invisible partner) toward the
+// player and presets the touch count so every branch of the shot logic
+// can be reached.
+const FEEDS = [
+  { key: '1', name: 'Palla morbida (1° tocco)', hint: 'Z bagher controllato · X alzata · Spazio auto',
+    from: () => ({ x: wx(rnd(1.5)), z: wz(-1, 2.0), y: 1.4 }), to: () => ({ x: player.x + rnd(0.4), z: player.z + rnd(0.3) }), vy: 13, touches: 0, side: -1 },
+  { key: '2', name: 'Palla forte (attacco avversario)', hint: 'Z/Spazio difesa · X palleggio su palla forte',
+    from: () => ({ x: wx(rnd(1.0)), z: wz(-1, 2.5), y: 3.6 }), to: () => ({ x: player.x + rnd(0.3), z: player.z + 0.2 }), vy: 1.7, hard: true, touches: 0, side: -1 },
+  { key: '3', name: 'Palla che scende bassa', hint: 'aspetta che scenda sotto le ginocchia: X alzata in bagher · Z ricezione',
+    from: () => ({ x: wx(rnd(1.5)), z: wz(-1, 2.5), y: 1.4 }), to: () => ({ x: player.x + rnd(0.3), z: player.z + 0.4 }), vy: 14, touches: 0, side: -1 },
+  { key: '4', name: 'Palla lontana', hint: 'doppia pressione di Z vicino al cerchio di caduta → tuffo',
+    from: () => ({ x: wx(rnd(1.0)), z: wz(-1, 2.0), y: 1.4 }), to: () => ({ x: player.x + (Math.random() < 0.5 ? -1 : 1) * 2.4, z: player.z + rnd(0.6) }), vy: 12, touches: 0, side: -1 },
+  { key: '5', name: 'Secondo tocco (dal compagno)', hint: 'X alzata · Z bagher controllato · a volte cade sotto rete',
+    from: () => ({ x: wx(rnd(2.0)), z: wz(1, 6.5), y: 1.2 }),
+    to: () => (Math.random() < 0.5 ? { x: player.x + rnd(0.3), z: player.z + rnd(0.3) } : { x: player.x + rnd(0.5), z: wz(1, 1.9 + rnd(0.3)) }),
+    vy: 10.5, touches: 1, side: 1 },
+  { key: '6', name: 'Terzo tocco', hint: 'Z / X / Spazio → free ball di là',
+    from: () => ({ x: wx(rnd(2.0)), z: wz(1, 2.0), y: 1.4 }), to: () => ({ x: player.x + rnd(0.3), z: player.z + rnd(0.3) }), vy: 11, touches: 2, side: 1 },
+  { key: '7', name: 'Alzata da schiacciare', hint: 'stai indietro · C presto: rincorsa 3 passi e salto · C di nuovo colpisce · ↑ lunga ↓ corta ←→ angolo',
+    from: () => ({ x: wx(rnd(2.0)), z: wz(1, 5.0), y: 1.2 }), to: () => ({ x: player.x + rnd(0.2), z: wz(1, 1.3) }), vy: 11.5, touches: 2, side: 1, spike: true },
+];
+let feed = FEEDS[0];
+let fedAt = 0, landedAt = -1, autoFeed = false, aiMode = false;
+
+function launchFeed(f = feed) {
+  feed = f;
+  renderFeeds();
+  const a = f.from(), b = f.to();
+  ball.x = a.x; ball.z = a.z; ball.y = a.y; ball.vx = ball.vy = ball.vz = 0;
+  ball.hist.length = 0; ball.squashT = 0; ball.aftertouch = 0;
+  launchBall(ball, a.x, a.z, b.x, b.z, f.vy, !!f.hard, 1, 0);
+  ball.lastSide = f.side; ball.touches = f.touches; ball.lastToucher = null; ball.chainQ = 0.7;
+  feederMesh.position.set(a.x, 0.09, a.z);
+  touches = 0; landedAt = -1; fedAt = performance.now();
+  player.cool = 0;
+  shotEl.firstChild.textContent = '—';
+  shotEl.querySelector('small').textContent = f.hint;
+  qfill.style.width = '0';
+  beep(f.hard ? 180 : 300, 0.05, 'triangle', 0.06);
+  setResult('in arrivo: ' + f.name.toLowerCase());
+}
+
+// ---------- input (same mapping as the game) ----------
+const keys = {};
+const keysDown = {};   // physical key state, never consumed (hold-to-charge)
+const edges = { bump: false, set: false, atk: false, auto: false };
+addEventListener('keydown', (e) => {
+  keys[e.code] = true; keysDown[e.code] = true;
+  if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
+  if (e.repeat) return;
+  if (e.code === 'KeyZ' || e.code === 'KeyJ') edges.bump = true;
+  if (e.code === 'KeyX' || e.code === 'KeyK') edges.set = true;
+  if (e.code === 'KeyC' || e.code === 'KeyL') edges.atk = true;
+  if (e.code === 'Space') edges.auto = true;
+  const f = FEEDS.find((x) => 'Digit' + x.key === e.code || 'Numpad' + x.key === e.code);
+  if (f) launchFeed(f);
+  if (e.code === 'Enter') launchFeed();
+  if (e.code === 'KeyT') { autoFeed = !autoFeed; renderToggles(); }
+  if (e.code === 'KeyI') { aiMode = !aiMode; renderToggles(); }
+  if (e.code === 'KeyR') {
+    player.x = player.home.x; player.z = player.home.z; player.vx = player.vz = 0;
+    player.aim = null; player.approach = null; player.swingQueued = false;
+  }
+});
+addEventListener('keyup', (e) => { keys[e.code] = false; keysDown[e.code] = false; });
+
+// is the button that opened the aim still held? (charges the touch height)
+function actionHeld(mode) {
+  if (mode === 'bump') return !!(keysDown.KeyZ || keysDown.KeyJ);
+  if (mode === 'set') return !!(keysDown.KeyX || keysDown.KeyK);
+  return !!keysDown.Space;
+}
+
+function stick() {
+  let mx = 0, mz = 0;
+  if (keys.ArrowLeft || keys.KeyA) mx -= 1;
+  if (keys.ArrowRight || keys.KeyD) mx += 1;
+  if (keys.ArrowUp || keys.KeyW) mz -= 1;
+  if (keys.ArrowDown || keys.KeyS) mz += 1;
+  const l = Math.max(1, Math.hypot(mx, mz));
+  return { mx: mx / l, mz: mz / l };
+}
+
+// human control: the same module the game uses (js/logic/humanControl.js)
+const HUMAN_FX = {
+  step: (p) => { sandPuff(p.x, p.z, 2, 0.5); beep(160, 0.03, 'triangle', 0.05); },   // run-up footfall
+  jump: () => { beep(500, 0.04, 'triangle', 0.05); },
+  dive: (p) => { sandPuff(p.x, p.z, 5, 1.0); beep(300, 0.05, 'triangle', 0.06); },
+};
+function updateHuman(dt, p) {
+  const { mx, mz } = stick();
+  updateHumanControl(p, { mx, mz, ...edges, held: actionHeld }, dt,
+    { ball, court: court(), shots, canAct: true, fx: HUMAN_FX });
+}
+
+// AI control of the same player: chase the landing point, touch on its own
+function updateAIPlayer(dt, p) {
+  const lp = landingPoint(ball);
+  let tx = p.home.x, tz = p.home.z;
+  const coming = ball.live && courtSideAtZ(lp.z, court()) === p.side;
+  if (coming) { tx = lp.x; tz = lp.z; }
+  if (feed.spike && ball.live && ball.lastSide === p.side) { tx = lp.x; tz = wz(p.side, 1.4); }
+  const dx = tx - p.x, dz = tz - p.z, d = Math.hypot(dx, dz);
+  const s = PLAYER_SPEED * 0.92 * (p.air ? 0.3 : 1) * Math.min(1, d / 0.55);
+  movePlayer(p, d > 0.05 ? dx / d * s : 0, d > 0.05 ? dz / d * s : 0, dt, court());
+  p.cool = Math.max(0, p.cool - dt);
+  if (!ball.live || p.cool > 0 || isBusy(p) || !isOnCourtSide(ball.z, p.side, court())) return;
+  const dist = Math.hypot(ball.x - p.x, ball.z - p.z);
+  if (feed.spike) {
+    if (!p.air && dist < 1.6 && ball.vy < 0 && ball.y < 3.8 && ball.y > 1.8) { if (startJump(p)) beep(500, 0.04, 'triangle', 0.05); }
+    else if (p.air && dist < 1.35 && ball.y > 1.4 && ball.y < p.jumpH + 3.2) shots.aiSpike(p);
+    return;
+  }
+  if (!p.air && dist < HIT_RADIUS && ball.y < REACH_GROUND && ball.vy < 2.5) {
+    p.windup = WINDUP + Math.random() * 0.04; p.wKind = 'ai';
+    p.faceA = faceAngle(p, ball.x, ball.z);
+  }
+}
+
+// ---------- HUD ----------
+const shotEl = document.getElementById('shot'), qfill = document.getElementById('qfill');
+const resultEl = document.getElementById('result');
+const done = new Set();
+function showShot(name) {
+  done.add(name); renderChecks();
+  shotEl.firstChild.textContent = SHOT_NAMES[name] || name;
+  const ch = player.wAim && name !== 'dive' && name !== 'spike' && !name.startsWith('ai-') ? player.wAim.charge : null;
+  shotEl.querySelector('small').textContent = 'tocco ' + touches + ' · qualità ' + Math.round(ball.chainQ * 100) + '%'
+    + (ch === null ? '' : ' · altezza ' + Math.round(ch * 100) + '%');
+  qfill.style.width = Math.round(ball.chainQ * 100) + '%';
+  qfill.style.background = ball.chainQ > 0.65 ? '#7bff6e' : ball.chainQ > 0.4 ? '#ffe14d' : '#ff5a5a';
+}
+function setResult(t) { resultEl.textContent = t; }
+function renderFeeds() {
+  document.getElementById('feeds').innerHTML = FEEDS.map((f) =>
+    `<div class="feed${f === feed ? ' on' : ''}" data-k="${f.key}"><span class="k">${f.key}</span>${f.name}<span class="hint">${f.hint}</span></div>`).join('');
+  document.querySelectorAll('.feed').forEach((el) => el.onclick = () => launchFeed(FEEDS.find((f) => f.key === el.dataset.k)));
+}
+function renderToggles() {
+  const a = document.getElementById('autoState'), i = document.getElementById('aiState');
+  a.textContent = autoFeed ? 'ON' : 'OFF'; a.className = 'toggle' + (autoFeed ? '' : ' off');
+  i.textContent = aiMode ? 'ON' : 'OFF'; i.className = 'toggle' + (aiMode ? '' : ' off');
+}
+function renderChecks() {
+  document.getElementById('checks').innerHTML = Object.keys(SHOT_NAMES)
+    .map((k) => `<span class="${done.has(k) ? 'done' : ''}">${done.has(k) ? '✔' : '·'} ${SHOT_NAMES[k].replace('AI · ', 'AI ')}</span>`).join('');
+}
+
+// ---------- loop ----------
+function updateBallLab(dt) {
+  const { mx } = stick();
+  const ev = stepBall(ball, dt, court(), Math.sign(mx));
+  if (ev.net === 'tape') { beep(180, 0.06, 'sawtooth', 0.09); setResult('nastro! la palla resta in gioco'); }
+  else if (ev.net === 'body') { beep(140, 0.08, 'sawtooth', 0.1); setResult('in rete'); }
+  if (ev.landed) {
+    sandPuff(ball.x, ball.z, 6, 1.0); beep(90, 0.1, 'sawtooth', 0.12);
+    const inside = inCourt(ball.x, ball.z, court());
+    const side = courtSideAtZ(ball.z, court());
+    setResult(!inside ? 'FUORI' : side === player.side ? 'a terra nel tuo campo' : 'DENTRO nel campo avversario ✔');
+    landedAt = performance.now();
+  }
+}
+
+let last = performance.now();
+function loop(now) {
+  requestAnimationFrame(loop);
+  let dt = Math.min((now - last) / 1000, 0.033); last = now;
+  if (hitstop > 0) { hitstop -= dt; dt = 0; }
+  if (ball.squashT > 0) ball.squashT -= Math.max(dt, 0.0001);
+
+  if (aiMode) updateAIPlayer(dt, player); else updateHuman(dt, player);
+  shots.stepActions(dt);
+  stepJumps(players, dt).forEach((p) => sandPuff(p.x, p.z, 4, 0.8));
+  updateBallLab(dt);
+  if (ball.live) recordTrail(ball);
+  if (autoFeed && landedAt > 0 && now - landedAt > 900) launchFeed();
+  edges.bump = edges.set = edges.atk = edges.auto = false;
+
+  updatePuffs(Math.max(dt, 0));
+  playersView.sync();
+  ballView.sync(ball);
+  aimView.sync([player]);
+  venueView.officials.update({ signal: false, authT: 0, servingSide: SIDE_USA, ballZ: ball.z });
+  renderer.render(scene, cam);
+}
+
+// start: ball resting at the feeder
+ball.x = wx(0); ball.z = wz(-1, 2.0); ball.y = 0.3;
+feederMesh.position.set(ball.x, 0.09, ball.z);
+mate.x = wx(2.0); mate.z = wz(1, 5.2);
+renderFeeds(); renderToggles(); renderChecks();
+resize();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

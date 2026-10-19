@@ -73,7 +73,7 @@
 <div id="banner">SENSIBLE BEACH VOLLEY
 USA vs SWEDEN
 PRESS SPACE TO SERVE</div>
-<div id="help">MOVE: ARROWS/WASD · <b>Z</b>: BUMP/DIVE · <b>X</b>: SET · <b>C</b>: ATTACK · SPACE: AUTO/SERVE · <b>1/2/3</b>: MAIN / SIDE L / SIDE R COURT · P/OPTIONS: PAD CONFIG</div>
+<div id="help">MOVE: ARROWS/WASD · <b>Z</b>/<b>X</b>/SPACE: PLANT &amp; AIM (HOLD = HIGHER · 2× = DIVE) · <b>C</b>: RUN-UP (ARROWS = PATH), <b>C</b> AGAIN: SPIKE · <b>1/2/3</b>: COURT · P: PAD</div>
 <div id="toast"></div>
 <div id="servebox">
   <canvas id="refIcon" width="24" height="24"></canvas>
@@ -88,7 +88,7 @@ PRESS SPACE TO SERVE</div>
 // ---------- logic: pure simulation, no Three.js / DOM ----------
 import { SIDE_USA, SIDE_SWE } from './js/logic/constants.js';
 import {
-  isOnCourtSide, courtSideAtZ, pickTargetLocal, targetToWorld,
+  isOnCourtSide, courtSideAtZ,
 } from './js/logic/court.js';
 import { createVenue } from './js/logic/venue.js';
 import {
@@ -101,15 +101,18 @@ import {
   tickPoint, tickServe, SERVE_LIMIT,
 } from './js/logic/match.js';
 import {
-  createPlayers, isBusy, stepJumps,
+  createPlayers, isBusy, stepJumps, faceAngle,
   startJump as jumpPlayer, startDive as divePlayer, movePlayer as movePlayerBody,
-  PLAYER_SPEED, HIT_RADIUS, REACH_GROUND, WINDUP, DOWN_TIME,
+  PLAYER_SPEED, HIT_RADIUS, REACH_GROUND, WINDUP,
 } from './js/logic/players.js';
+import { createShots } from './js/logic/shots.js';
+import { updateHumanControl } from './js/logic/humanControl.js';
 // ---------- view: what gets drawn ----------
 import { makeTex, flatPlane } from './js/view/textures.js';
 import { createVenueView } from './js/view/venueView.js';
 import { createPlayersView } from './js/view/playersView.js';
 import { createBallView } from './js/view/ballView.js';
+import { createAimView } from './js/view/aimView.js';
 import { REF_AUTH_TIME } from './js/view/npcView.js';
 
 // ============================================================
@@ -169,6 +172,7 @@ const players=createPlayers();
 const playersView=createPlayersView(scene, players);
 
 const ballView=createBallView(scene);
+const aimView=createAimView(scene);
 const marker=flatPlane(0.6,0.4,markerTex);marker.position.y=0.13;scene.add(marker);
 // referees are drawn by js/view/npcView.js; this drives the arm sweep
 let authT=0;   // service-authorization sweep timer
@@ -254,14 +258,16 @@ function drawRefIcon(blow){
 drawRefIcon(true);
 
 const keys={};
-const btnEdges={bump:false,set:false,atk:false};   // dedicated fundamentals buttons
+const keysDown={};   // physical key state, never consumed by the game (hold-to-charge)
+const btnEdges={bump:false,set:false,atk:false,auto:false};   // dedicated fundamentals buttons + Space
 addEventListener('keydown',e=>{
-  keys[e.code]=true;
+  keys[e.code]=true;keysDown[e.code]=true;
   if(['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code))e.preventDefault();
   if(!e.repeat){
     if(e.code==='KeyZ'||e.code==='KeyJ')btnEdges.bump=true;   // BAGHER / dive
     if(e.code==='KeyX'||e.code==='KeyK')btnEdges.set=true;    // ALZATA (palleggio o bagher)
     if(e.code==='KeyC'||e.code==='KeyL')btnEdges.atk=true;    // ATTACCO (salto + schiacciata)
+    if(e.code==='Space')btnEdges.auto=true;                   // tasto intelligente
   }
   if(e.code==='KeyP'&&pad.connected){cfgOpen?closeCfg():openCfg();return;}
   if(!e.repeat&&(e.code==='Digit1'||e.code==='Digit2'||e.code==='Digit3')){
@@ -272,7 +278,7 @@ addEventListener('keydown',e=>{
   }
   if(match.state==='over'&&e.code==='Enter')newMatch();
 });
-addEventListener('keyup',e=>keys[e.code]=false);
+addEventListener('keyup',e=>{keys[e.code]=false;keysDown[e.code]=false;});
 
 // ============================================================
 // GAMEPAD (PlayStation-type) — Gamepad API + config wizard
@@ -285,7 +291,7 @@ const PAD_LABELS={0:'CROSS (X)',1:'CIRCLE (O)',2:'SQUARE',3:'TRIANGLE',
 function padLabel(i){return PAD_LABELS[i]||('BUTTON '+i);}
 
 const pad={connected:false,index:null,id:'',btnBump:0,btnSet:2,btnAtk:1,dz:0.28,prev:[]};
-const padInput={mx:0,mz:0,bumpPressed:false,setPressed:false,atkPressed:false};
+const padInput={mx:0,mz:0,bumpPressed:false,setPressed:false,atkPressed:false,bumpHeld:false,setHeld:false};
 let cfgOpen=false, cfgStage=0;
 const toast=document.getElementById('toast');
 const padcfg=document.getElementById('padcfg');
@@ -369,6 +375,7 @@ function renderCfg(){
 function pollPad(){
   padInput.mx=0;padInput.mz=0;
   padInput.bumpPressed=false;padInput.setPressed=false;padInput.atkPressed=false;
+  padInput.bumpHeld=false;padInput.setHeld=false;
   const gp=padGp();
   if(!gp)return;
   // edge detection over all buttons
@@ -427,6 +434,8 @@ function pollPad(){
   padInput.bumpPressed=pressed.includes(pad.btnBump);
   padInput.setPressed=pressed.includes(pad.btnSet);
   padInput.atkPressed=pressed.includes(pad.btnAtk);
+  padInput.bumpHeld=!!pad.prev[pad.btnBump];
+  padInput.setHeld=!!pad.prev[pad.btnSet];
 }
 
 function setHUD(){
@@ -442,8 +451,6 @@ function showBanner(t){banner.textContent=t;banner.style.display='block';}
 function hideBanner(){banner.style.display='none';}
 function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
 function rnd(a){return (Math.random()*2-1)*a;}
-// angle so the sprite's "up" (arms/platform) points at (tx,tz)
-function faceAngle(p,tx,tz){return Math.atan2(-(tx-p.x),-(tz-p.z));}
 
 function setupServe(){
   hitstop=0;
@@ -484,8 +491,26 @@ function pointTo(side,msg){
 
 function landingPoint(){ return ballLandingPoint(ball); }
 // ============================================================
-// SHOTS
+// SHOTS — logic in js/logic/shots.js; here we wire in the rules,
+// the ball launch and the feedback (sand, hit-stop, sounds)
 // ============================================================
+const SHOT_SOUNDS={
+  dive:   [430,0.08,'triangle',0.09],
+  shank:  [260,0.07,'sawtooth',0.08],
+  setDump:[560,0.05,'triangle',0.07],
+  drop:   [520,0.05,'triangle',0.07],
+};
+const shots=createShots({
+  ball, players, venue,
+  touch: registerTouch,
+  hit: hitBall,
+  fx:{
+    puff: sandPuff,
+    hitstop: t=>{ hitstop=Math.max(hitstop,t); },
+    sound: name=>beep(...SHOT_SOUNDS[name]),
+  },
+});
+const { pickOpenTarget, aiSpike } = shots;
 
 function startJump(p){
   if(jumpPlayer(p))beep(500,0.04,'triangle',0.05);
@@ -497,124 +522,6 @@ function startDive(p){
   beep(300,0.05,'triangle',0.06);
 }
 
-function diveTouch(p){
-  if(!registerTouch(p))return;
-  p.diveT=0;p.downT=DOWN_TIME;
-  p.poseKind='dig';p.poseT=DOWN_TIME;
-  ball.chainQ=0.25;
-  hitstop=Math.max(hitstop,0.03);
-  sandPuff(p.x,p.z,7,1.2);
-  const tx=txFrom(p, rnd(2.4), -3.4, 3.4);
-  const tz=wz(p.side, 2.0+Math.random()*2.5);
-  hitBall(p.x,p.z,tx,tz,11+rnd(1),false,1,0.5);
-  beep(430,0.08,'triangle',0.09);
-}
-
-// standing touch. mode: 'auto' (context decides, legacy Space),
-// 'bump' (dedicated BUMP button), 'set' (dedicated SET button).
-// Using the wrong fundamental on the wrong ball costs quality:
-// hand-setting a driven ball is heavily penalized; bumping an easy
-// ball is legal but slightly less precise than a clean set.
-function groundTouch(p,mx,mz,mode='auto'){
-  const dist=Math.hypot(ball.x-p.x,ball.z-p.z);
-  let q=Math.max(0.15, 1-dist/HIT_RADIUS);
-  const ivx=ball.vx, ivz=ball.vz;
-  const hsp=Math.hypot(ivx,ivz);
-  let cushion=0;
-  if(hsp>0.5){
-    const inx=ivx/hsp, inz=ivz/hsp;
-    cushion=clamp(mx*inx+mz*inz,-1,1)*0.5;   // + soft hands, − stiff arms
-  }
-  if(!registerTouch(p))return;
-  p.cool=0.35;
-  p.faceA=faceAngle(p,ball.x,ball.z);
-
-  // resolve the actual touch from button intent + ball state
-  let kind;
-  if(ball.touches>=3)kind='free';
-  else if(mode==='bump')kind=(hsp>6.0||ball.y<1.3)?'recv':'bumpctrl';
-  else if(mode==='set')kind=(hsp>7.0)?'ovdig':(ball.y<1.35?'bumpset':'set');
-  else kind=(hsp>6.0||ball.y<1.3)?'recv':'set';
-
-  if(kind==='free'){
-    // third touch from the ground = safe free ball over
-    p.poseKind='bump';p.poseT=0.18;
-    const tx=txFrom(p, mx*2.5+rnd(1.2), -3.4, 3.4);
-    const tz=wz(-p.side, 2.5+Math.random()*3.5);
-    hitBall(p.x,p.z,tx,tz,9,false,1,0.12);
-  }else if(kind==='recv'){
-    q=clamp(q+cushion*0.25,0.1,1);
-    ball.chainQ=q;
-    const hard=hsp>9;
-    p.poseKind=hard?'dig':'bump'; p.poseT=0.2;
-    const give=(hard?0.12:0.07)*(1+cushion);
-    p.vx+=ivx*give; p.vz+=ivz*give;
-    if(hard){
-      sandPuff(p.x,p.z,6,1.1);
-      const tx=txFrom(p, mx*0.8+rnd((1-q)*1.6), -3.4, 3.4);
-      const tz=wz(p.side, clamp(Math.abs(lz(p.z))-1.5+rnd((1-q)*1.2),1.2,court().half-0.8));
-      hitBall(p.x,p.z,tx,tz,12,false,1,Math.max(0,Math.min(0.45,(1-q)*0.5-cushion*0.15)));
-    }else{
-      const tx=txFrom(p, mx*1.8+rnd((1-q)*1.8), -2.6, 2.6);
-      const tz=wz(p.side, 1.8+rnd((1-q)*0.9));
-      hitBall(p.x,p.z,tx,tz,10.5,false,1,Math.max(0,Math.min(0.5,(1-q)*0.55-cushion*0.15)));
-    }
-  }else if(kind==='bumpctrl'){
-    // controlled bump on an easy ball: legit, a touch less precise than a set
-    q=clamp(q+cushion*0.15,0.1,1);
-    ball.chainQ=(ball.chainQ+q*0.92)/2;
-    p.poseKind='bump';p.poseT=0.2;
-    const tx=txFrom(p, mx*2.2+rnd((1-q)*1.4), -2.8, 2.8);
-    const tz=wz(p.side, 1.5+rnd((1-q)*0.8));
-    hitBall(p.x,p.z,tx,tz,10.8,false,1,(1-q)*0.3);
-  }else if(kind==='ovdig'){
-    // hands on a driven ball: badly punished control
-    q*=0.5;
-    ball.chainQ=q;
-    p.poseKind='set';p.poseT=0.2;
-    const give=0.1*(1+cushion);
-    p.vx+=ivx*give; p.vz+=ivz*give;
-    sandPuff(p.x,p.z,4,0.9);
-    const tx=txFrom(p, rnd((1-q)*1.8), -3.4, 3.4);
-    const tz=wz(p.side, clamp(Math.abs(lz(p.z))-1.0+rnd(1.0),1.2,court().half-0.8));
-    hitBall(p.x,p.z,tx,tz,11.5,false,1,Math.min(0.5,(1-q)*0.5));
-  }else if(kind==='bumpset'){
-    // ALZATA IN BAGHER: the low-ball set variant — platform arms,
-    // same set trajectory, slightly less precise than clean hands
-    ball.chainQ=(ball.chainQ+q*0.9)/2;
-    p.poseKind='bump';p.poseT=0.22;
-    const tx=txFrom(p, mx*2.6+rnd((1-q)*1.3), -3.0, 3.0);
-    const tz=wz(p.side, 1.25);
-    hitBall(p.x,p.z,tx,tz,11.5,false,1,(1-q)*0.3);
-  }else{
-    // clean overhead SET
-    p.poseKind='set';p.poseT=0.22;
-    ball.chainQ=(ball.chainQ+q)/2;
-    const tx=txFrom(p, mx*2.6+rnd((1-q)*1.2), -3.0, 3.0);
-    const tz=wz(p.side, 1.25);
-    hitBall(p.x,p.z,tx,tz,11.5,false,1,(1-q)*0.25);
-  }
-  ball.aftertouch=p.side===SIDE_USA?0.5:0;
-}
-
-function trySpike(p,mx,mz){
-  const dist=Math.hypot(ball.x-p.x,ball.z-p.z);
-  if(dist>1.35)return;
-  if(ball.y<1.4||ball.y>p.jumpH+3.2)return;
-  if(!registerTouch(p))return;
-  p.cool=0.4;
-  p.faceA=faceAngle(p,ball.x,ball.z);
-  const hitH=p.jumpH+2.2;
-  const timing=Math.max(0.1, 1-Math.abs(ball.y-hitH)/1.3);
-  const apexQ=Math.min(1,p.jumpH/1.1);
-  const q=timing*apexQ*(0.7+0.3*ball.chainQ);
-  const depth = mz<0? 3.6 : mz>0? 0.6 : 2.0;
-  const tz=wz(-p.side, 1.4+depth+rnd((1-q)*1.6));
-  const tx=txFrom(p, mx*3.4+rnd((1-q)*2.2), -3.6, 3.6);
-  hitBall(p.x,p.z,tx,tz,1.7,true,0.78+0.5*q,0.05);
-  p.poseKind='spikeHit';p.poseT=0.28;   // arm whips down after contact
-  if(p.side===SIDE_USA)ball.aftertouch=0.6;
-}
 
 // ---------- shared movement ----------
 function movePlayer(p,tvx,tvz,dt){ movePlayerBody(p,tvx,tvz,dt,court()); }
@@ -622,6 +529,9 @@ const busy=isBusy;
 
 // ---------- human control ----------
 function humanPlayer(){
+  // whoever is aiming, winding up a touch or running up to attack keeps the control
+  const busyHuman=players.find(p=>p.side===SIDE_USA&&(p.aim||p.approach||p.swingQueued||(p.windup>0&&p.wKind==='human')));
+  if(busyHuman)return busyHuman;
   const lp=landingPoint();
   const ref=ball.live?lp:ball;
   let us=players.filter(p=>p.side===SIDE_USA);
@@ -633,6 +543,20 @@ function humanPlayer(){
     Math.hypot(a.x-ref.x,a.z-ref.z)<Math.hypot(b.x-ref.x,b.z-ref.z)?a:b);
 }
 
+// is the button that opened the aim still held? (charges the touch height)
+function actionHeld(mode){
+  if(mode==='bump')return !!(keysDown['KeyZ']||keysDown['KeyJ']||padInput.bumpHeld);
+  if(mode==='set') return !!(keysDown['KeyX']||keysDown['KeyK']||padInput.setHeld);
+  return !!keysDown['Space'];
+}
+
+// feedback for the human player's body actions (logic in js/logic/humanControl.js)
+const HUMAN_FX={
+  step: p=>{ sandPuff(p.x,p.z,2,0.5); beep(160,0.03,'triangle',0.05); },   // run-up footfall
+  jump: p=>{ beep(500,0.04,'triangle',0.05); },
+  dive: p=>{ sandPuff(p.x,p.z,5,1.0); beep(300,0.05,'triangle',0.06); },
+};
+
 function updateHuman(dt,p){
   let mx=0,mz=0;
   if(keys['ArrowLeft']||keys['KeyA'])mx-=1;
@@ -643,87 +567,28 @@ function updateHuman(dt,p){
   mx+=padInput.mx; mz+=padInput.mz;
   const l=Math.max(1,Math.hypot(mx,mz));
   mx/=l; mz/=l;
-  const maxSp=PLAYER_SPEED*(p.air?0.3:1);
-  movePlayer(p, mx*maxSp, mz*maxSp, dt);
-  p.cool=Math.max(0,p.cool-dt);
 
-  const anyBtn=btnEdges.bump||btnEdges.set||btnEdges.atk;
-  if(keys['Space']||anyBtn){
-    if(canServe(match,SIDE_USA)){
-      keys['Space']=false;btnEdges.bump=btnEdges.set=btnEdges.atk=false;
-      let tx=ball.x+mx*2.2, tz=wz(-SIDE_USA, 3.5+Math.random()*3);
-      ball.y=2.0;   // struck at full extension: clears the tape with margin
-      hitBall(ball.x,ball.z,tx,tz,8.0,false);
-      makeFloat(ball);
-      startRally(match,ball,p);
-      hideBanner();ball.aftertouch=0.6;setTouchHUD();
-    }else if(match.state==='rally'&&p.cool<=0&&!busy(p)){
-      const dist=Math.hypot(ball.x-p.x,ball.z-p.z);
-      const onOurSide=isOnCourtSide(ball.z, p.side, court());
-      const canGround=ball.live&&onOurSide&&dist<HIT_RADIUS&&ball.y<REACH_GROUND&&ball.lastToucher!==p;
-      if(!p.air){
-        if(btnEdges.atk){
-          // ATTACK: jump now, swing on the second press
-          btnEdges.atk=false;
-          startJump(p);
-        }else if(btnEdges.bump){
-          // BUMP: platform touch in reach, diving save out of reach
-          btnEdges.bump=false;
-          if(canGround){
-            p.windup=WINDUP;p.wmx=mx;p.wmz=mz;p.wKind='human';p.wMode='bump';
-            p.faceA=faceAngle(p,ball.x,ball.z);
-          }else if(ball.live&&onOurSide&&ball.lastToucher!==p&&dist<3.0&&ball.y<2.0){
-            startDive(p);
-          }else{
-            p.cool=0.12;   // swung at nothing
-          }
-        }else if(btnEdges.set){
-          // SET: overhead, or bump-set on low balls
-          btnEdges.set=false;
-          if(canGround){
-            p.windup=WINDUP;p.wmx=mx;p.wmz=mz;p.wKind='human';p.wMode='set';
-            p.faceA=faceAngle(p,ball.x,ball.z);
-          }else{
-            p.cool=0.12;
-          }
-        }else if(keys['Space']){
-          // legacy smart button: context decides, like before
-          if(canGround){
-            keys['Space']=false;
-            p.windup=WINDUP;p.wmx=mx;p.wmz=mz;p.wKind='human';p.wMode='auto';
-            p.faceA=faceAngle(p,ball.x,ball.z);
-          }else if(ball.live&&onOurSide&&ball.lastToucher!==p&&dist<3.0&&ball.y<2.0){
-            keys['Space']=false;
-            startDive(p);
-          }else if(lz(p.z)<3.8||(ball.y>2.3&&dist<1.6)){
-            keys['Space']=false;
-            startJump(p);
-          }
-        }
-      }else{
-        // airborne: attack button (or Space) swings
-        if(btnEdges.atk||keys['Space']){
-          btnEdges.atk=false;keys['Space']=false;
-          trySpike(p,mx,mz);
-        }
-      }
-    }
+  // serve: any action button once the referee has whistled
+  const anyBtn=btnEdges.bump||btnEdges.set||btnEdges.atk||btnEdges.auto;
+  if((keys['Space']||anyBtn)&&canServe(match,SIDE_USA)){
+    keys['Space']=false;btnEdges.bump=btnEdges.set=btnEdges.atk=btnEdges.auto=false;
+    let tx=ball.x+mx*2.2, tz=wz(-SIDE_USA, 3.5+Math.random()*3);
+    ball.y=2.0;   // struck at full extension: clears the tape with margin
+    hitBall(ball.x,ball.z,tx,tz,8.0,false);
+    makeFloat(ball);
+    startRally(match,ball,p);
+    hideBanner();ball.aftertouch=0.6;setTouchHUD();
   }
+
+  updateHumanControl(p,
+    { mx, mz, bump:btnEdges.bump, set:btnEdges.set, atk:btnEdges.atk, auto:btnEdges.auto, held:actionHeld },
+    dt,
+    { ball, court:court(), shots, canAct:match.state==='rally', fx:HUMAN_FX });
 }
+
 
 
 // ---------- AI ----------
-function pickOpenTarget(side){
-  const opps=players.filter(p=>p.side!==side);
-  let best=targetToWorld(court(), pickTargetLocal(side)), bestD=-1;
-  for(let i=0;i<6;i++){
-    const t=targetToWorld(court(), pickTargetLocal(side));
-    let dmin=1e9;
-    opps.forEach(o=>{dmin=Math.min(dmin,Math.hypot(o.x-t.x,o.z-t.z));});
-    if(dmin>bestD){bestD=dmin;best=t;}
-  }
-  return best;
-}
 
 function updateAI(dt,human){
   const lp=landingPoint();
@@ -798,107 +663,9 @@ function updateAI(dt,human){
   });
 }
 
-function aiGround(p){
-  const dist=Math.hypot(ball.x-p.x,ball.z-p.z);
-  const ivx=ball.vx, ivz=ball.vz;
-  const hspIn=Math.hypot(ivx,ivz);
-  let q=Math.max(0.3,1-dist/HIT_RADIUS)*(0.75+Math.random()*0.25);
-  q*=clamp(1-(hspIn-8)*0.045,0.55,1);
-  if(!registerTouch(p))return;
-  p.cool=0.5;
-  p.faceA=faceAngle(p,ball.x,ball.z);
-  const hard=hspIn>9;
-  const mate=players.find(m=>m.side===p.side&&m!==p);
-  if(ball.touches>=3){
-    p.poseKind='bump';p.poseT=0.18;
-    const t=pickOpenTarget(p.side);
-    hitBall(p.x,p.z,t.x+rnd(1.2),t.z+rnd(1.2),9,false,1,0.12);
-  }else if(ball.touches===1){
-    p.poseKind=hard?'dig':'bump'; p.poseT=0.2;
-    const give=(hard?0.12:0.07);
-    p.vx+=ivx*give; p.vz+=ivz*give;
-    if(hard)sandPuff(p.x,p.z,6,1.1);
-    const shank=Math.random()<(hspIn>9?0.14:0.05);
-    if(shank){
-      ball.chainQ=0.2;
-      hitBall(p.x,p.z, txFrom(p, rnd(3.2), -4.2, 4.2), wz(p.side, 1.0+Math.random()*4)+rnd(1.5), 10+rnd(2), false,1,0.5);
-      beep(260,0.07,'sawtooth',0.08);
-    }else if(hard){
-      // defensive dig: pop it high near the spot, weight back
-      ball.chainQ=q;
-      const tx=txFrom(p, rnd((1-q)*1.6), -3.4, 3.4);
-      const tz=wz(p.side, clamp(Math.abs(lz(p.z))-1.5+rnd((1-q)*1.2),1.2,court().half-0.8));
-      hitBall(p.x,p.z,tx,tz,12,false,1,Math.min(0.45,(1-q)*0.5));
-    }else{
-      ball.chainQ=q;
-      hitBall(p.x,p.z, txFrom(p, p.x*0.4 - (p.x - court().centerX)*0.6 + rnd((1-q)*1.6), -2.4, 2.4), wz(p.side, 1.7+rnd((1-q)*0.8)), 10.5,false,1,Math.min(0.5,(1-q)*0.55));
-    }
-  }else{
-    if(Math.abs(p.z)<2.6&&ball.y>1.6&&Math.random()<0.15){
-      p.poseKind='set';p.poseT=0.22;
-      const t=pickOpenTarget(p.side);
-      hitBall(p.x,p.z,t.x+rnd(1.0),t.z+rnd(1.0),5.5,false,0.95,0.08);
-      beep(560,0.05,'triangle',0.07);
-      return;
-    }
-    p.poseKind='set';p.poseT=0.22;
-    ball.chainQ=(ball.chainQ+q)/2;
-    let sz=wz(p.side, 1.25);
-    if(Math.random()<0.10){ sz=wz(p.side, 0.55+Math.random()*0.3); ball.chainQ*=0.8; }
-    hitBall(p.x,p.z, wx(clamp(mate.x - court().centerX + rnd((1-q)*0.8), -2.6, 2.6)), sz, 11.5,false,1,(1-q)*0.25);
-  }
-}
 
-function aiSpike(p){
-  if(!registerTouch(p))return;
-  p.cool=0.5;
-  p.faceA=faceAngle(p,ball.x,ball.z);
-  p.poseKind='spikeHit';p.poseT=0.28;   // follow-through
-  const timing=Math.max(0.2,1-Math.abs(ball.y-(p.jumpH+2.2))/1.3);
-  const q=timing*(0.6+Math.random()*0.35)*(0.7+0.3*ball.chainQ);
-  const dropProb=0.18+(1-ball.chainQ)*0.25;
-  if(Math.random()<dropProb){
-    const tx=txFrom(p, rnd(2.0), -3.2, 3.2);
-    const tz=wz(-p.side, 1.1+Math.random()*0.9);
-    hitBall(p.x,p.z,tx,tz,4.6,false,0.9,0.03);
-    beep(520,0.05,'triangle',0.07);
-    return;
-  }
-  const t=pickOpenTarget(p.side);
-  if(Math.random()<0.15){t.x=wx(Math.sign(t.x-court().centerX||1)*(court().width/2-0.15+rnd(0.5)));}
-  hitBall(p.x,p.z,t.x+rnd((1-q)*2),t.z+rnd((1-q)*2),1.7,true,0.78+0.5*q,0.05);
-}
 
 // ---------- wind-ups & dives ----------
-function updateActions(dt){
-  players.forEach(p=>{
-    if(p.poseT>0)p.poseT-=dt;
-    if(p.windup>0){
-      p.windup-=dt;
-      p.faceA=faceAngle(p,ball.x,ball.z);   // track the ball while coiling
-      if(p.windup<=0){
-        const dist=Math.hypot(ball.x-p.x,ball.z-p.z);
-        if(ball.live&&dist<HIT_RADIUS*1.3&&ball.y<REACH_GROUND+0.2&&ball.lastToucher!==p){
-          if(p.wKind==='human')groundTouch(p,p.wmx,p.wmz,p.wMode||'auto');
-          else aiGround(p);
-        }else{
-          p.cool=Math.max(p.cool,0.18);
-        }
-      }
-    }
-    if(p.diveT>0){
-      p.diveT-=dt;
-      const dist=Math.hypot(ball.x-p.x,ball.z-p.z);
-      if(ball.live&&dist<1.05&&ball.y<1.7&&ball.lastToucher!==p&&isOnCourtSide(ball.z, p.side, court())){
-        diveTouch(p);
-      }else if(p.diveT<=0){
-        p.downT=DOWN_TIME;
-      }
-    }else if(p.downT>0){
-      p.downT-=dt;
-    }
-  });
-}
 
 // anticipation: whoever is about to receive coils into the ready pose
 function updateReady(){
@@ -945,6 +712,7 @@ function sync(){
   playersView.sync();
 
   ballView.sync(ball);
+  aimView.sync(players);
 
   const h=humanPlayer();
   marker.position.set(h.x,0.13,h.z-1.0);
@@ -970,8 +738,8 @@ function loop(now){
     btnEdges.bump=btnEdges.bump||padInput.bumpPressed;
     btnEdges.set =btnEdges.set ||padInput.setPressed;
     btnEdges.atk =btnEdges.atk ||padInput.atkPressed;
-    if(match.state==='over'&&(btnEdges.bump||btnEdges.set||btnEdges.atk)){
-      btnEdges.bump=btnEdges.set=btnEdges.atk=false;
+    if(match.state==='over'&&(btnEdges.bump||btnEdges.set||btnEdges.atk||btnEdges.auto)){
+      btnEdges.bump=btnEdges.set=btnEdges.atk=btnEdges.auto=false;
       newMatch();
     }
   }
@@ -1017,7 +785,7 @@ function loop(now){
     const h=humanPlayer();
     updateHuman(dt,h);
     updateAI(dt,h);
-    updateActions(dt);
+    shots.stepActions(dt);
     updateJumps(dt);
     updateBall(dt);
     updateReady();
@@ -1026,7 +794,7 @@ function loop(now){
       holdBallForServe(match,ball);
     }
   }
-  btnEdges.bump=btnEdges.set=btnEdges.atk=false;   // edges are one frame only
+  btnEdges.bump=btnEdges.set=btnEdges.atk=btnEdges.auto=false;   // edges are one frame only
   updatePuffs(Math.max(dt,0));
   sync();
   renderer.render(scene,cam);
