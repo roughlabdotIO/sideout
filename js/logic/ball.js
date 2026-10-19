@@ -15,6 +15,23 @@ const TRAIL_LEN = 14;
 /** Lateral push per second while aftertouch is active. */
 const AFTERTOUCH_PUSH = 13;
 
+/**
+ * Air drag on the horizontal speed: dv/dt = −DRAG_C·|v|·v (capped).
+ * Over a flight of t seconds a ball starting at speed v covers
+ * ln(1 + DRAG_C·v·t) / DRAG_C, which launches and predictions account for.
+ */
+const DRAG_C = 0.015;
+const DRAG_MAX = 0.9;
+
+/** Horizontal distance covered in t seconds from speed v, with drag. */
+function dragDistance(v, t) {
+  return Math.log(1 + DRAG_C * v * t) / DRAG_C;
+}
+/** Starting speed needed to cover distance d in t seconds, with drag. */
+function dragSpeedFor(d, t) {
+  return (Math.exp(DRAG_C * d) - 1) / (DRAG_C * t);
+}
+
 function rnd(a) { return (Math.random() * 2 - 1) * a; }
 
 /**
@@ -54,8 +71,11 @@ export function launchBall(ball, px, pz, tx, tz, vyUp, hard, power = 1, inherit 
   const inVx = ball.vx, inVz = ball.vz;
   const y0 = Math.max(ball.y, 0.2);
   const T = (vyUp + Math.sqrt(vyUp * vyUp + 2 * BALL_G * y0)) / BALL_G;
-  ball.vx = ((tx - px) / T * power) * (1 - inherit) + inVx * inherit;
-  ball.vz = ((tz - pz) / T * power) * (1 - inherit) + inVz * inherit;
+  // speed that reaches the target in T despite air drag
+  const D = Math.hypot(tx - px, tz - pz);
+  const k = D > 1e-6 ? dragSpeedFor(D, T) / D : 0;
+  ball.vx = ((tx - px) * k * power) * (1 - inherit) + inVx * inherit;
+  ball.vz = ((tz - pz) * k * power) * (1 - inherit) + inVz * inherit;
   ball.vy = vyUp;
   ball.live = true;
   // spin: spikes rip, soft touches roll; sign follows the lateral direction
@@ -77,7 +97,10 @@ export function landingPoint(ball) {
   const a = -0.5 * BALL_G, b = ball.vy, c = ball.y;
   const disc = b * b - 4 * a * c;
   const t = (-b - Math.sqrt(Math.max(disc, 0))) / (2 * a);
-  return { x: ball.x + ball.vx * t, z: ball.z + ball.vz * t, t };
+  const v = Math.hypot(ball.vx, ball.vz);
+  if (v < 1e-6) return { x: ball.x, z: ball.z, t };
+  const d = dragDistance(v, t);   // air drag shortens the flight
+  return { x: ball.x + ball.vx / v * d, z: ball.z + ball.vz / v * d, t };
 }
 
 /**
@@ -103,7 +126,7 @@ export function stepBall(ball, dt, court, steer = 0) {
     ball.vx += rnd(4.5) * dt;
   }
   const hsp = Math.hypot(ball.vx, ball.vz);
-  const k = Math.min(0.9, 0.015 * hsp);
+  const k = Math.min(DRAG_MAX, DRAG_C * hsp);
   ball.vx -= ball.vx * k * dt;
   ball.vz -= ball.vz * k * dt;
 
