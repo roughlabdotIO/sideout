@@ -100,22 +100,25 @@ export function isOnCourtSide(z, side, court) {
   return courtSideAtZ(z, court) === side;
 }
 
-/** Keep player inside the active court run-off zone (world coords). */
+/**
+ * Keep a player on their own half of the active court, inside the run-off:
+ * 0.55 from the net up to 1.2 past the end line, 1.5 past the sidelines.
+ */
 export function clampPlayerOnCourt(p, court) {
   const halfW = court.width / 2 + 1.5;
   const lx = p.x - court.centerX;
   p.x = court.centerX + Math.max(-halfW, Math.min(halfW, lx));
 
-  if (p.side === 1) {
-    p.z = Math.max(court.localSideZ(1, 0.55), Math.min(court.localSideZ(1, court.half + 1.2), p.z));
-  } else {
-    p.z = Math.min(court.localSideZ(-1, -0.55), Math.max(court.localSideZ(-1, -(court.half + 1.2)), p.z));
-  }
+  const depth = (p.z - court.centerZ) * p.side;   // distance from the net into own half
+  p.z = court.localSideZ(p.side, Math.max(0.55, Math.min(court.half + 1.2, depth)));
 }
 
 /**
- * Net crossing relative to the active court centre line.
+ * Ball crossing the net line of the active court this frame.
  * @returns {{ hAt: number, blocked: boolean, tapeClip?: boolean } | null}
+ *   null: no crossing, or the ball clears the net;
+ *   blocked: passes outside the antennas (dies on the hitter's side);
+ *   otherwise below the top of the net: tapeClip = grazes the band, else into the net.
  */
 export function netCrossEvent(prevZ, z, ballX, ballY, ballVy, dt, court) {
   const prevRel = prevZ - court.centerZ;
@@ -123,9 +126,8 @@ export function netCrossEvent(prevZ, z, ballX, ballY, ballVy, dt, court) {
   if (Math.sign(prevRel) === Math.sign(curRel) || prevRel === 0) return null;
   const t = Math.abs(prevRel) / (Math.abs(prevRel) + Math.abs(curRel));
   const hAt = ballY - ballVy * dt * (1 - t);
-  if (hAt >= court.netH || Math.abs(ballX - court.centerX) >= court.width / 2 + 0.4) {
-    return { hAt, blocked: true };
-  }
+  if (Math.abs(ballX - court.centerX) >= court.width / 2 + 0.4) return { hAt, blocked: true };
+  if (hAt >= court.netH) return null;   // clears the net
   return { hAt, blocked: false, tapeClip: hAt > court.netH - 0.22 };
 }
 
